@@ -370,6 +370,19 @@
                 } catch (err) { setError(err.message || "Falha na análise."); } finally { setIsAnalyzing(false); }
             };
 
+            const handleAddTextLayer = () => {
+                const newId = `text_new_${Date.now()}`;
+                const newLayer = { 
+                    id: newId, 
+                    content: 'Novo Texto', 
+                    boundingBox: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 }, 
+                    fontDescription: 'Fonte padrão', 
+                    effects: 'Nenhum' 
+                };
+                setEditableElements(prev => [...prev, newLayer]);
+                setSelectedLayerId(newId);
+            };
+
             const handleApplyAllChanges = async () => {
                 if (!currentImage || !analysis) return;
                 if (!(await consumeCredit())) return;
@@ -493,7 +506,7 @@
                                     <span className="text-xs font-bold text-white">{userData.role === 'admin' ? '∞' : userData.credits}</span>
                                 </div>
                             )}
-                            <button onClick={() => auth.signOut()} className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors"><LogOut className="w-4 h-4" /></button>
+                            <button onClick={() => auth.signOut()} className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors no-tap-highlight"><LogOut className="w-4 h-4" /></button>
                         </div>
                     </header>
 
@@ -501,7 +514,7 @@
                         <div className="absolute inset-0 bg-black/80 backdrop-blur-2xl flex items-center justify-center z-[100] p-4 overflow-y-auto custom-scrollbar">
                             <div className="w-full max-w-4xl glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-2xl relative animate-scale-in border border-white/20 shadow-inner">
                                 <button onClick={() => setShowAdminPanel(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X className="w-6 h-6"/></button>
-                                <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-apple-ai"><Shield className="w-7 h-7" /> Gestão de Utilizadores</h2>
+                                <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-transparent bg-clip-text bg-gradient-to-r from-ai-accent-3 to-white tracking-tight"><Shield className="w-7 h-7 text-ai-accent-3" /> Painel Admin</h2>
                                 <div className="overflow-x-auto rounded-2xl border border-white/10">
                                     <table className="w-full text-left text-sm border-collapse">
                                         <thead className="bg-white/5 text-white/50 text-[10px] uppercase">
@@ -517,8 +530,8 @@
                                                     <td className="p-4 text-center font-mono text-lg font-bold text-ai-accent-2">{u.role === 'admin' ? '∞' : u.credits}</td>
                                                     <td className="p-4 text-center">
                                                         <div className="flex items-center justify-center gap-2">
-                                                            <button onClick={() => updateCredits(u.id, 1)} className="p-2 bg-success/20 hover:bg-success/40 text-success rounded-xl"><Plus className="w-4 h-4" /></button>
-                                                            <button onClick={() => updateCredits(u.id, -1)} className="p-2 bg-danger/20 hover:bg-danger/40 text-danger rounded-xl"><Minus className="w-4 h-4" /></button>
+                                                            <button onClick={() => updateCredits(u.id, 1)} className="p-2 bg-success/20 hover:bg-success/40 text-success rounded-xl transition-colors"><Plus className="w-4 h-4" /></button>
+                                                            <button onClick={() => updateCredits(u.id, -1)} className="p-2 bg-danger/20 hover:bg-danger/40 text-danger rounded-xl transition-colors"><Minus className="w-4 h-4" /></button>
                                                         </div>
                                                     </td>
                                                 </tr>
