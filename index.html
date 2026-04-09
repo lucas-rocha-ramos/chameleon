@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Chameleon - Standalone Mode</title>
+    
+    <!-- Scripts: React, Babel, Tailwind, Lucide, Firebase, Gemini -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Fix for lucide-react UMD build which looks for `global.react` instead of `global.React` -->
+    <script>window.react = window.React;</script>
+    
+    <!-- Pinned Babel to 7.22.20 to fix the "Infinity has already been declared" bug in recent standalone versions -->
+    <script src="https://unpkg.com/@babel/standalone@7.22.20/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Point to the explicit UMD build of lucide-react to ensure window.lucideReact is defined -->
+    <script src="https://unpkg.com/lucide-react@0.330.0/dist/umd/lucide-react.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/uuid@latest/dist/umd/uuidv4.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+    <!-- Google Generative AI SDK -->
+    <script type="importmap">
+    {
+      "imports": {
+        "@google/genai": "https://esm.run/@google/genai"
+      }
+    }
+    </script>
+    <script type="module">
+        import { GoogleGenAI } from '@google/genai';
+        window.GoogleGenAI = GoogleGenAI;
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+        :root {
+            --background: #000000;
+            --panel: rgba(20, 20, 22, 0.65);
+            --surface: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-highlight: rgba(255, 255, 255, 0.15);
+            --text-primary: #F5F5F7;
+            --text-secondary: #86868B;
+            --danger: #FF453A;
+            --success: #32D74B;
+            --ai-accent-1: #FF85A2;
+            --ai-accent-2: #B388EB;
+            --ai-accent-3: #4CA1FF;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+            background-color: var(--background);
+            color: var(--text-primary);
+            margin: 0;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .bg-apple-ai { background: linear-gradient(135deg, var(--ai-accent-1), var(--ai-accent-2), var(--ai-accent-3)); }
+        .text-apple-ai { background: linear-gradient(135deg, var(--ai-accent-1), var(--ai-accent-2), var(--ai-accent-3)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        .glass-panel { background-color: var(--panel); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); border: 1px solid var(--border); }
+        .glass-surface { background-color: var(--surface); border: 1px solid var(--border); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 20px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes scaleIn { from { transform: scale(0.92); opacity: 0; filter: blur(10px); } to { transform: scale(1); opacity: 1; filter: blur(0); } }
+        .animate-scale-in { animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes spinSlow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin-slow { animation: spinSlow 3s linear infinite; }
+        .no-tap-highlight { -webkit-tap-highlight-color: transparent; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        const { 
+            Bot, Search, MoreVertical, Eraser, Sparkles, Brush, Layout, MessageSquare, User, 
+            Image: ImageIcon, Video: VideoIcon, Wand2, FlaskConical, Scissors, Palette, ChevronDown, ChevronUp,
+            Download: DownloadIcon, Share2, Copy, ThumbsUp, ThumbsDown, RotateCcw, Code, ExternalLink, Maximize2,
+            Key, Settings, Trash2, UserCircle, Send, UploadCloud, X, Eye, EyeOff, Check, RefreshCw, Layers, HelpCircle, Menu, Pencil, Plus, LogOut, Shield, Coins, Minus
+        } = window.lucideReact || window.LucideReact;
+
+        // --- Configuração Firebase Exata do Utilizador ---
+        let firebaseConfig;
+        if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+            firebaseConfig = {
+              apiKey: "AIzaSyBOWZaucNjSCxj5e0AgPI5i-SVYWZy7EzQ",
+              authDomain: "chameleon-app-5972e.firebaseapp.com",
+              projectId: "chameleon-app-5972e",
+              storageBucket: "chameleon-app-5972e.firebasestorage.app",
+              messagingSenderId: "841824277337",
+              appId: "1:841824277337:web:a373d6826c3c4de6f17248"
+            };
+        }
+
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+
+        const ADMIN_EMAIL = "designer.br.vg@gmail.com";
+
+        // --- Gemini API ---
+        const apiKey = ""; 
+        
+        // --- CometAPAI API ---
+        const cometApiKey = "sk-sQBN3019wtzUKPASO1sVHkDSVEXJMsCJo8IC1gKKPpDFMP5H";
+
+        const withRetry = async (fn, maxRetries = 4) => {
+            const delays = [1000, 2000, 4000, 8000];
+            let lastError;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    return await fn();
+                } catch (error) {
+                    lastError = error;
+                    if (error.status === 400 || error.status === 403) throw error;
+                    if (i < maxRetries - 1) await new Promise(resolve => setTimeout(resolve, delays[i]));
+                }
+            }
+            throw lastError;
+        };
+
+        const generateNanoBananaImage = async (prompt, userImages = []) => {
+            return await withRetry(async () => {
+                if (userImages && userImages.length > 0) {
+                    const parts = [{ text: `INSTRUÇÃO: ${prompt}` }];
+                    userImages.forEach((img, idx) => {
+                        parts.push({ text: `Referência @imagem${idx + 1}:` });
+                        parts.push({ inlineData: { data: img.base64, mimeType: img.mimeType } });
+                    });
+
+                    const payload = {
+                        contents: [{ role: "user", parts }],
+                        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+                    };
+                    
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    const result = await res.json();
+                    if (!res.ok) {
+                        const e = new Error(result.error?.message || "Erro na edição de imagem");
+                        e.status = res.status;
+                        throw e;
+                    }
+
+                    const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
+                    if (!inlineData) throw new Error("Nenhuma imagem retornada pela IA.");
+
+                    return {
+                        images: [{
+                            id: uuidv4(),
+                            base64: inlineData.data,
+                            mimeType: inlineData.mimeType || 'image/png',
+                            prompt,
+                            createdAt: new Date()
+                        }],
+                        text: "Edição concluída."
+                    };
+                } else {
+                    const payload = {
+                        instances: { prompt: prompt },
+                        parameters: { sampleCount: 1 }
+                    };
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await res.json();
+                    if (!res.ok) {
+                        const e = new Error(result.error?.message || "Erro na geração de imagem");
+                        e.status = res.status;
+                        throw e;
+                    }
+                    
+                    const b64 = result.predictions?.[0]?.bytesBase64Encoded;
+                    if (!b64) throw new Error("Nenhuma imagem gerada");
+
+                    return {
+                        images: [{
+                            id: uuidv4(),
+                            base64: b64,
+                            mimeType: 'image/png',
+                            prompt,
+                            createdAt: new Date()
+                        }],
+                        text: "Geração concluída."
+                    };
+                }
+            });
+        };
+
+        const analyzeImageForChameleon = async (base64, mimeType) => {
+            return await withRetry(async () => {
+                const prompt = `Aja como um especialista em design gráfico e análise de imagem. Analise esta arte/imagem e identifique todos os elementos editáveis para torná-la 100% editável em um estúdio.
+            Retorne um JSON estritamente seguindo este esquema:
+            {
+              "analysis": {
+                "overallStyle": "descrição do estilo visual",
+                "typographyDescription": "descrição das fontes usadas",
+                "colorPalette": ["#hex1", "#hex2"]
+              },
+              "texts": [
+                { "id": "text_1", "content": "texto original", "boundingBox": {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.05}, "fontDescription": "descrição da fonte e cor", "effects": "descrição de sombras, gradientes, etc" }
+              ],
+              "people": [
+                { "id": "person_1", "description": "descrição da pessoa", "boundingBox": {"x": 0.3, "y": 0.2, "width": 0.3, "height": 0.6}, "clothingAndPoseDescription": "descrição detalhada da roupa e pose", "blendingDescription": "como a pessoa se integra ao fundo" }
+              ],
+              "objects": [
+                { "id": "obj_1", "description": "descrição do objeto", "boundingBox": {"x": 0.7, "y": 0.7, "width": 0.1, "height": 0.1} }
+              ]
+            }`;
+
+                const payload = {
+                    contents: [{
+                        role: "user",
+                        parts: [
+                            { text: prompt },
+                            { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }
+                        ]
+                    }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
+
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await res.json();
+                if (!res.ok) {
+                    const e = new Error(result.error?.message || "Erro na análise da imagem");
+                    e.status = res.status;
+                    throw e;
+                }
+
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!text) throw new Error("Resposta de análise vazia");
+
+                const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
+                return JSON.parse(cleanText);
+            });
+        };
+
+        const performImageEdit = async ({ baseImage, prompt, additionalImages, analysis }) => {
+            const userImages = [baseImage, ...(additionalImages || [])];
+            const strictPrompt = `EDIÇÃO PROFISSIONAL E RIGOROSA:\n${prompt}\n\nREGRAS CRÍTICAS: NÃO MISTURE AS IMAGENS. Quando for pedido para substituir alguém/algo, a versão original da @imagem1 deve ser COMPLETAMENTE APAGADA E REMOVIDA, sem deixar rastos, "fantasmas" ou sobreposições. A nova pessoa deve ocupar o espaço de forma limpa. O restante da imagem deve ficar idêntico.`;
+            const res = await generateNanoBananaImage(strictPrompt, userImages);
+            if (res.images && res.images.length > 0) return { image: res.images[0] };
+            throw new Error("Falha ao editar a imagem.");
+        };
+
+        const searchImageInspiration = async (q) => {
+            return await withRetry(async () => {
+                const payload = {
+                    contents: [{ role: "user", parts: [{ text: `Retorne 4 prompts de imagem descritivos e curtos em inglês para "${q}". Responda APENAS com um array JSON contendo as strings.` }] }],
+                    generationConfig: { responseMimeType: "application/json" }
+                };
+
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await res.json();
+                if (!res.ok) throw new Error(result.error?.message || "Erro ao buscar inspirações");
+
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                const prompts = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
+                
+                const results = [];
+                for (const p of prompts) {
+                    try {
+                        const imgRes = await generateNanoBananaImage(p);
+                        if (imgRes.images) results.push(...imgRes.images);
+                    } catch (e) {
+                        console.error("Error generating inspiration image", e);
+                    }
+                }
+                return { images: results };
+            });
+        };
+
+        const replicateStyleAndPersonalize = async (opt) => {
+            const prompt = `Crie uma NOVA arte baseada no DNA de estilo da imagem de referência fornecida (@imagem1).
+            DNA DE ESTILO:
+            - Estilo Geral: ${opt.analysis.analysis?.overallStyle}
+            - Tipografia: ${opt.analysis.analysis?.typographyDescription}
+            - Paleta de Cores: ${opt.analysis.analysis?.colorPalette?.join(', ')}
+            INFORMAÇÕES PERSONALIZADAS:
+            ${Object.entries(opt.responses).map(([key, value]) => `- ${key}: ${value}`).join('\n')}
+            Mantenha a COMPOSIÇÃO e VIBE. Substitua textos e pessoas conforme necessário.`;
+
+            const images = [opt.referenceImage, ...(opt.userImages || [])];
+            return await generateNanoBananaImage(prompt, images);
+        };
+
+        const extractLayersForExport = async (baseImage) => {
+            const res = await generateNanoBananaImage("Remova o fundo da imagem de referência.", [baseImage]);
+            return { layers: [{ filename: 'bg.png', base64: res.images[0].base64, mimeType: 'image/png' }] };
+        };
+
+        const getEventCoordinates = (e) => {
+            if (e.touches && e.touches.length > 0) return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+            return { clientX: e.clientX, clientY: e.clientY };
+        };
+
+        const ChameleonView = () => {
+            const [user, setUser] = useState(null);
+            const [userData, setUserData] = useState(null);
+            
+            const [referenceImage, setReferenceImage] = useState(null);
+            const [currentImage, setCurrentImage] = useState(null);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [analysis, setAnalysis] = useState(null);
+            const [isEditing, setIsEditing] = useState(false);
+            const [isExporting, setIsExporting] = useState(false);
+            const [error, setError] = useState(null);
+            const [warning, setWarning] = useState(null);
+            
+            const [stagedUserTexts, setStagedUserTexts] = useState({});
+            const [appliedUserTexts, setAppliedUserTexts] = useState({});
+            const [stagedGeneralPrompt, setStagedGeneralPrompt] = useState('');
+            const [stagedPeopleReplacements, setStagedPeopleReplacements] = useState({});
+            const [appliedPeopleReplacements, setAppliedPeopleReplacements] = useState({});
+
+            const [inspirationQuery, setInspirationQuery] = useState('');
+            const [isSearching, setIsSearching] = useState(false);
+            const [inspirationResults, setInspirationResults] = useState([]);
+            const [inspirationError, setInspirationError] = useState(null);
+
+            const [selectedLayerId, setSelectedLayerId] = useState(null);
+            const [editableElements, setEditableElements] = useState([]);
+            const [activeDrag, setActiveDrag] = useState(null);
+            const [workflow, setWorkflow] = useState({ status: 'idle' });
+
+            const [showAdminPanel, setShowAdminPanel] = useState(false);
+            const [showPaymentModal, setShowPaymentModal] = useState(false);
+            const [allUsers, setAllUsers] = useState([]);
+
+            const imageContainerRef = useRef(null);
+            const fileInputRefs = useRef({});
+
+            // Verifica se está dentro do iFrame do Canvas
+            const isIframe = window !== window.top;
+
+            useEffect(() => {
+                auth.getRedirectResult().catch(err => {
+                    if (err.code !== 'auth/operation-not-supported-in-this-environment') {
+                        console.error("Erro no redirecionamento:", err);
+                    }
+                });
+
+                const unsubscribeAuth = auth.onAuthStateChanged(u => {
+                    setUser(u);
+                });
+                return () => unsubscribeAuth();
+            }, []);
+
+            useEffect(() => {
+                if (!user) {
+                    setUserData(null);
+                    return;
+                }
+
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'chameleon-app';
+                const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(user.uid);
+
+                const unsubscribeDoc = userRef.onSnapshot(doc => {
+                    if (doc.exists) {
+                        setUserData(doc.data());
+                    } else {
+                        const isAdmin = user.email === ADMIN_EMAIL;
+                        const newData = {
+                            email: user.email || 'anonimo@chameleon.app',
+                            displayName: user.displayName || 'Novo Utilizador',
+                            photoURL: user.photoURL || '',
+                            credits: 1, 
+                            role: isAdmin ? 'admin' : 'user',
+                            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                        };
+                        userRef.set(newData).catch(err => {
+                            console.error("Erro ao criar perfil inicial:", err);
+                            if(err.code === 'permission-denied') {
+                                setError("As regras do Firestore continuam a bloquear a gravação do perfil. Certifique-se de que publicou as regras.");
+                            }
+                        });
+                    }
+                }, err => {
+                    console.error("Erro ao escutar perfil:", err);
+                });
+
+                return () => unsubscribeDoc();
+            }, [user]);
+
+            useEffect(() => {
+                if (!user || !showAdminPanel || userData?.role !== 'admin') return;
+                
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'chameleon-app';
+                const profilesRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles');
+                
+                const unsubscribeAll = profilesRef.onSnapshot(snap => {
+                    const usersList = [];
+                    snap.forEach(doc => usersList.push({ id: doc.id, ...doc.data() }));
+                    
+                    usersList.sort((a, b) => {
+                        const timeA = a.createdAt?.toMillis() || 0;
+                        const timeB = b.createdAt?.toMillis() || 0;
+                        return timeB - timeA;
+                    });
+                    
+                    setAllUsers(usersList);
+                }, err => {
+                    console.error("Error fetching users", err);
+                });
+                
+                return () => unsubscribeAll();
+            }, [user, showAdminPanel, userData]);
+
+            const handleGoogleLogin = async () => {
+                try {
+                    setError(null);
+                    await auth.signInWithPopup(googleProvider);
+                } catch (err) {
+                    console.error("Login com Google falhou:", err);
+                    if (err.code === 'auth/operation-not-supported-in-this-environment' || err.code === 'auth/popup-blocked') {
+                        setError("O seu navegador ou este ambiente bloqueou a janela pop-up do Google. Por favor, exporte este projeto para o seu computador ou ative os pop-ups.");
+                    } else if (err.code === 'auth/operation-not-allowed') {
+                        setError("ERRO FIREBASE: O método de login 'Google' não está ativo na Consola.");
+                    } else {
+                        setError("Erro ao iniciar sessão: " + err.message);
+                    }
+                }
+            };
+
+            const handleAnonymousLogin = async () => {
+                try {
+                    setError(null);
+                    await auth.signInAnonymously();
+                } catch (err) {
+                    console.error("Login Anónimo falhou:", err);
+                    if (err.code === 'auth/operation-not-allowed') {
+                        setError("O método 'Anónimo' não está ativo no Firebase. Ative-o para testar.");
+                    } else {
+                        setError("Erro ao iniciar sessão de teste: " + err.message);
+                    }
+                }
+            };
+
+            const consumeCredit = async () => {
+                if (!user || !userData) {
+                    setError("Autentique-se primeiro.");
+                    return false;
+                }
+                if (userData.role === 'admin') return true; 
+                
+                if (userData.credits <= 0) {
+                    setShowPaymentModal(true);
+                    return false;
+                }
+                
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'chameleon-app';
+                const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(user.uid);
+                
+                try {
+                    await userRef.update({ credits: firebase.firestore.FieldValue.increment(-1) });
+                    return true;
+                } catch(e) {
+                    console.error("Erro a consumir créditos", e);
+                    setError("Não foi possível processar. O seu Firestore pode estar bloqueado.");
+                    return false;
+                }
+            };
+
+            const updateCredits = async (targetUid, amount) => {
+                try {
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'chameleon-app';
+                    const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(targetUid);
+                    await userRef.update({
+                        credits: firebase.firestore.FieldValue.increment(amount)
+                    });
+                } catch (err) {
+                    console.error("Erro ao atualizar créditos:", err);
+                    setError("Permissões insuficientes para atualizar créditos.");
+                }
+            };
+
+            const handleImageUpload = (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    const img = { base64, mimeType: file.type };
+                    startAnalysis(img);
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const startAnalysis = async (img) => {
+                setReferenceImage(img);
+                setCurrentImage(img);
+                setIsAnalyzing(true);
+                setError(null);
+                setAnalysis(null);
+                setEditableElements([]);
+
+                try {
+                    const result = await analyzeImageForChameleon(img.base64, img.mimeType);
+                    setAnalysis(result);
+                    const initialTexts = result.texts.reduce((acc, t) => {
+                        acc[t.id] = t.content;
+                        return acc;
+                    }, {});
+                    setStagedUserTexts(initialTexts);
+                    setAppliedUserTexts(initialTexts);
+                    const allElements = [...(result.people || []), ...(result.texts || []), ...(result.objects || [])];
+                    setEditableElements(allElements);
+                } catch (err) {
+                    console.error("Analysis error", err);
+                    setError("Falha ao analisar a imagem.");
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            const handleAddTextLayer = () => {
+                const newId = `text_new_${Date.now()}`;
+                const newLayer = {
+                    id: newId,
+                    content: 'Novo Texto',
+                    boundingBox: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 },
+                    fontDescription: 'Fonte padrão, cor branca',
+                    effects: 'Nenhum'
+                };
+                setEditableElements(prev => [...prev, newLayer]);
+                setStagedUserTexts(prev => ({ ...prev, [newId]: 'Novo Texto' }));
+                setSelectedLayerId(newId);
+            };
+
+            const handleApplyAllChanges = async () => {
+                if (!currentImage || !analysis) return;
+                
+                const hasCredit = await consumeCredit();
+                if (!hasCredit) return;
+
+                setIsEditing(true);
+                setError(null);
+
+                try {
+                    const editInstructions = [];
+                    const additionalImages = [];
+                    const originalElements = [...(analysis.people || []), ...(analysis.texts || []), ...(analysis.objects || [])];
+
+                    originalElements.forEach(originalEl => {
+                        const stillExists = editableElements.some(el => el.id === originalEl.id);
+                        if (!stillExists) {
+                            editInstructions.push(`REMOVA completamente o elemento "${originalEl.content || originalEl.description || 'desconhecido'}" da imagem. Preencha o espaço vazio de forma realista com o fundo.`);
+                        }
+                    });
+
+                    editableElements.forEach(el => {
+                        const originalEl = originalElements.find(o => o.id === el.id);
+                        const eb = el.boundingBox || { x: 0.1, y: 0.1, width: 0.2, height: 0.2 };
+                        const boxStr = `na posição {x: ${eb.x.toFixed(4)}, y: ${eb.y.toFixed(4)}, w: ${eb.width.toFixed(4)}, h: ${eb.height.toFixed(4)}}`;
+                        
+                        if (!originalEl) {
+                            if (el.content !== undefined) {
+                                const content = stagedUserTexts[el.id] || 'Novo Texto';
+                                editInstructions.push(`ADICIONE um novo elemento de texto com o conteúdo "${content}" ${boxStr}. Use um estilo que combine com o design geral.`);
+                            }
+                            return;
+                        }
+
+                        const ob = originalEl.boundingBox || { x: 0.1, y: 0.1, width: 0.2, height: 0.2 };
+                        const boxChanged = Math.abs(ob.x - eb.x) > 0.001 || Math.abs(ob.y - eb.y) > 0.001 || Math.abs(ob.width - eb.width) > 0.001 || Math.abs(ob.height - eb.height) > 0.001;
+
+                        if (el.content !== undefined) {
+                            const textChanged = stagedUserTexts[el.id] !== appliedUserTexts[el.id];
+                            if (textChanged || boxChanged) {
+                                let instruction = `Para o texto original "${originalEl.content}", `;
+                                if (textChanged) instruction += `altere o conteúdo para "${stagedUserTexts[el.id]}"`;
+                                if (textChanged && boxChanged) instruction += " e ";
+                                if (boxChanged) instruction += `mova e redimensione-o para se ajustar perfeitamente ${boxStr}`;
+                                instruction += `. Replique sua aparência original: ${originalEl.fontDescription || 'fonte original'}, incluindo efeitos como '${originalEl.effects || 'nenhum'}'.`;
+                                editInstructions.push(instruction);
+                            }
+                        } else if (el.clothingAndPoseDescription !== undefined || el.description !== undefined) {
+                            const personReplaced = !!stagedPeopleReplacements[el.id];
+                            if (personReplaced) {
+                                additionalImages.push(stagedPeopleReplacements[el.id]);
+                                let instruction = `Substitua a pessoa/objeto '${originalEl.description}' pela imagem adicional ${additionalImages.length}.`;
+                                instruction += ` DEVE ser cortado e redimensionado para a proporção exata ${boxStr}.`;
+                                instruction += ` AVISO: REMOVA 100% a pessoa original. Não coloque as duas pessoas lado a lado. Apenas a pessoa da imagem adicional deve aparecer.`;
+                                editInstructions.push(instruction);
+                            } else if (boxChanged) {
+                                editInstructions.push(`Mova e redimensione a pessoa/objeto '${originalEl.description}' para que ela se ajuste perfeitamente ${boxStr}.`);
+                            }
+                        }
+                    });
+
+                    if (stagedGeneralPrompt) editInstructions.push(stagedGeneralPrompt);
+
+                    if (editInstructions.length === 0) {
+                        throw new Error("Nenhuma alteração foi solicitada. Edite ou mova um elemento primeiro.");
+                    }
+
+                    const result = await performImageEdit({
+                        baseImage: currentImage,
+                        prompt: editInstructions.join('\n- '),
+                        additionalImages: additionalImages.length > 0 ? additionalImages : undefined,
+                        analysis
+                    });
+                    
+                    setCurrentImage(result.image);
+                    setAppliedUserTexts(stagedUserTexts);
+                    setStagedPeopleReplacements({});
+                    setStagedGeneralPrompt('');
+                    setSelectedLayerId(null);
+                    
+                    const newAnalysis = await analyzeImageForChameleon(result.image.base64, result.image.mimeType);
+                    if (!newAnalysis.error) {
+                        setAnalysis(newAnalysis);
+                        const allElements = [...(newAnalysis.people || []), ...(newAnalysis.texts || []), ...(newAnalysis.objects || [])];
+                        setEditableElements(allElements);
+                    }
+                } catch (err) {
+                    console.error("Erro ao aplicar edições:", err);
+                    setError(err.message || "Erro ao aplicar edições.");
+                } finally {
+                    setIsEditing(false);
+                }
+            };
+
+            const handleInspirationSearch = async () => {
+                if (!inspirationQuery.trim()) return;
+                
+                const hasCredit = await consumeCredit();
+                if (!hasCredit) return;
+
+                setIsSearching(true);
+                setInspirationError(null);
+                try {
+                    const res = await searchImageInspiration(inspirationQuery);
+                    setInspirationResults(res.images);
+                } catch (err) {
+                    setInspirationError("Erro ao buscar inspirações.");
+                } finally {
+                    setIsSearching(false);
+                }
+            };
+
+            const handleStartReplication = () => {
+                if (!referenceImage || !analysis) return;
+                setWorkflow({
+                    status: 'questionnaire',
+                    referenceImage,
+                    analysis,
+                    responses: {
+                        nicho: '',
+                        titulo: '',
+                        data: '',
+                        horario: '',
+                        local: '',
+                        outros: ''
+                    }
+                });
+            };
+
+            const handleConfirmReplication = async () => {
+                if (workflow.status !== 'questionnaire') return;
+                
+                const hasCredit = await consumeCredit();
+                if (!hasCredit) return;
+
+                setIsEditing(true);
+                setError(null);
+                try {
+                    const result = await replicateStyleAndPersonalize({
+                        referenceImage: workflow.referenceImage,
+                        analysis: workflow.analysis,
+                        responses: workflow.responses,
+                        userImages: Object.values(stagedPeopleReplacements)
+                    });
+                    if (result.images && result.images.length > 0) {
+                        const newImg = result.images[0];
+                        setCurrentImage(newImg);
+                        setReferenceImage(newImg);
+                        setWorkflow({ status: 'idle' });
+                        startAnalysis(newImg);
+                    }
+                } catch (err) {
+                    setError("Erro ao replicar estilo.");
+                } finally {
+                    setIsEditing(false);
+                }
+            };
+
+            const handleExportLayers = async () => {
+                if (!currentImage) return;
+                setIsExporting(true);
+                try {
+                    const res = await extractLayersForExport(currentImage);
+                    res.layers.forEach(layer => {
+                        const link = document.createElement('a');
+                        link.href = `data:${layer.mimeType};base64,${layer.base64}`;
+                        link.download = layer.filename;
+                        link.click();
+                    });
+                } catch (err) {
+                    setError("Erro ao exportar camadas.");
+                } finally {
+                    setIsExporting(false);
+                }
+            };
+
+            const handleDragStart = (e, id, type) => {
+                if (e.type !== 'touchstart') e.preventDefault(); 
+                
+                const element = editableElements.find(el => el.id === id);
+                if (!element) return;
+
+                const { clientX, clientY } = getEventCoordinates(e);
+                
+                setActiveDrag({
+                    id, type,
+                    startX: clientX, startY: clientY,
+                    startBox: { ...element.boundingBox }
+                });
+            };
+
+            const handleMouseMove = useCallback((e) => {
+                if (!activeDrag || !imageContainerRef.current) return;
+                
+                if (e.type === 'touchmove') e.preventDefault();
+
+                const { clientX, clientY } = getEventCoordinates(e);
+                const rect = imageContainerRef.current.getBoundingClientRect();
+                
+                const dx = (clientX - activeDrag.startX) / rect.width;
+                const dy = (clientY - activeDrag.startY) / rect.height;
+
+                setEditableElements(prev => prev.map(el => {
+                    if (el.id === activeDrag.id) {
+                        const nb = { ...activeDrag.startBox };
+                        if (activeDrag.type === 'move') {
+                            nb.x += dx; nb.y += dy;
+                        } else {
+                            nb.width += dx; nb.height += dy;
+                        }
+                        return { ...el, boundingBox: nb };
+                    }
+                    return el;
+                }));
+            }, [activeDrag]);
+
+            const handleResetChanges = () => {
+                setStagedUserTexts(appliedUserTexts);
+                setStagedPeopleReplacements({});
+                setStagedGeneralPrompt('');
+                
+                const originalElements = [...(analysis.people || []), ...(analysis.texts || []), ...(analysis.objects || [])];
+                setEditableElements(originalElements);
+            };
+
+            const handleStartOver = () => {
+                setReferenceImage(null);
+                setCurrentImage(null);
+                setAnalysis(null);
+                setAppliedPeopleReplacements({});
+                setStagedPeopleReplacements({});
+                setAppliedUserTexts({});
+                setStagedUserTexts({});
+                setStagedGeneralPrompt('');
+                setError(null);
+                setIsAnalyzing(false);
+                setIsEditing(false);
+                setInspirationQuery('');
+                setIsSearching(false);
+                setInspirationResults([]);
+                setInspirationError(null);
+                setSelectedLayerId(null);
+                setEditableElements([]);
+                setActiveDrag(null);
+                setWorkflow({ status: 'idle' });
+            };
+
+            const handleMouseUp = () => setActiveDrag(null);
+
+            useEffect(() => {
+                if (activeDrag) {
+                    window.addEventListener('mousemove', handleMouseMove);
+                    window.addEventListener('mouseup', handleMouseUp);
+                    window.addEventListener('touchmove', handleMouseMove, { passive: false });
+                    window.addEventListener('touchend', handleMouseUp);
+                }
+                return () => {
+                    window.removeEventListener('mousemove', handleMouseMove);
+                    window.removeEventListener('mouseup', handleMouseUp);
+                    window.removeEventListener('touchmove', handleMouseMove);
+                    window.removeEventListener('touchend', handleMouseUp);
+                };
+            }, [activeDrag, handleMouseMove]);
+
+            if (!user) {
+                return (
+                    <div className="h-[100dvh] flex flex-col items-center justify-center p-6 text-center bg-black relative overflow-hidden">
+                        {/* iOS 26 Background Blurs */}
+                        <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-ai-accent-1/20 blur-[120px] rounded-full pointer-events-none mix-blend-screen"></div>
+                        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] bg-ai-accent-3/20 blur-[150px] rounded-full pointer-events-none mix-blend-screen"></div>
+                        
+                        <div className="z-10 animate-fade-in flex flex-col items-center">
+                            <div className="w-24 h-24 glass-surface rounded-[2.5rem] flex items-center justify-center mb-10 shadow-2xl relative">
+                                <div className="absolute inset-0 rounded-[2.5rem] bg-apple-ai opacity-20 blur-xl"></div>
+                                <Layout className="w-12 h-12 text-white relative z-10" />
+                            </div>
+                            <h1 className="text-5xl font-bold mb-4 tracking-tight">Chameleon</h1>
+                            <p className="text-text-secondary text-lg mb-10 max-w-sm font-medium">Acesse o estúdio de edição com IA para começar a criar.</p>
+                            
+                            <div className="flex flex-col gap-4 w-full max-w-xs">
+                                <button 
+                                    onClick={handleGoogleLogin} 
+                                    className="w-full px-8 py-4 bg-white text-black font-semibold rounded-full hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(255,255,255,0.15)] no-tap-highlight"
+                                >
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24">
+                                        <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                        <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                        <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                        <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                    </svg>
+                                    Entrar com Google
+                                </button>
+
+                                {isIframe && (
+                                    <button 
+                                        onClick={handleAnonymousLogin} 
+                                        className="w-full px-8 py-3 bg-white/10 text-white font-medium rounded-full hover:bg-white/20 transition-all text-sm no-tap-highlight"
+                                    >
+                                        Testar Estúdio (Modo Anónimo)
+                                    </button>
+                                )}
+                            </div>
+
+                            {error && (
+                                <div className="mt-8 p-4 bg-danger/10 border border-danger/30 rounded-xl text-left max-w-md animate-fade-in">
+                                    <p className="text-danger text-sm font-bold mb-1">Aviso</p>
+                                    <p className="text-white/80 text-xs">{error}</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-[100dvh] flex flex-col overflow-hidden bg-black relative">
+                    {/* Background subtle elements */}
+                    <div className="absolute top-0 inset-x-0 h-40 bg-gradient-to-b from-white/[0.05] to-transparent pointer-events-none"></div>
+
+                    {/* Apple Style Header / Dynamic Bar */}
+                    <header className="px-4 py-3 lg:px-6 lg:py-4 glass-panel border-b-0 border-white/5 flex items-center justify-between z-50 rounded-b-[2rem] mx-2 mt-2 shadow-xl shadow-black/50">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-white/10 rounded-[1.2rem] flex items-center justify-center backdrop-blur-md">
+                                <Layout className="w-5 h-5 text-white" />
+                            </div>
+                            <div className="hidden sm:block">
+                                <h1 className="text-lg font-bold tracking-tight leading-tight">Chameleon</h1>
+                                <p className="text-[10px] text-text-secondary font-medium uppercase tracking-wider">VisionOS Vibe</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 sm:gap-4">
+                            {userData?.role === 'admin' && (
+                                <button onClick={() => setShowAdminPanel(true)} className="flex items-center gap-2 px-3 py-1.5 bg-ai-accent-3/20 text-ai-accent-3 border border-ai-accent-3/30 rounded-full hover:bg-ai-accent-3/30 transition-colors text-xs font-bold no-tap-highlight">
+                                    <Shield className="w-4 h-4" /> Admin
+                                </button>
+                            )}
+                            {userData && (
+                                <div className="flex items-center gap-2 px-3 py-1.5 glass-surface rounded-full border border-ai-accent-2/30 cursor-pointer" onClick={() => setShowPaymentModal(true)}>
+                                    <Coins className="w-4 h-4 text-ai-accent-2" />
+                                    <span className="text-xs font-bold text-white">
+                                        {userData.role === 'admin' ? '∞' : userData.credits}
+                                    </span>
+                                </div>
+                            )}
+                            {user && (
+                                <div className="flex items-center gap-2 px-1 pr-3 py-1 glass-surface rounded-full">
+                                    {user.photoURL ? (
+                                        <img src={user.photoURL} className="w-7 h-7 rounded-full" />
+                                    ) : (
+                                        <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+                                            <User className="w-4 h-4 text-white" />
+                                        </div>
+                                    )}
+                                    <span className="text-xs font-semibold text-text-primary truncate max-w-[80px] sm:max-w-[120px]">
+                                        {user.displayName || user.email?.split('@')[0] || 'Utilizador Convidado'}
+                                    </span>
+                                </div>
+                            )}
+                            <button onClick={() => { auth.signOut(); setUser(null); setUserData(null); }} className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors no-tap-highlight">
+                                <LogOut className="w-4 h-4" />
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Admin Panel Modal */}
+                    {showAdminPanel && userData?.role === 'admin' && (
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-2xl flex items-center justify-center z-[100] p-4 overflow-y-auto custom-scrollbar">
+                            <div className="w-full max-w-4xl glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-2xl relative animate-scale-in border border-white/20">
+                                <button onClick={() => setShowAdminPanel(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X className="w-6 h-6"/></button>
+                                <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-transparent bg-clip-text bg-gradient-to-r from-ai-accent-3 to-white tracking-tight">
+                                    <Shield className="w-7 h-7 text-ai-accent-3" /> Painel Administrativo
+                                </h2>
+                                
+                                <div className="overflow-x-auto rounded-2xl border border-white/10">
+                                    <table className="w-full text-left text-sm border-collapse">
+                                        <thead className="bg-white/5">
+                                            <tr className="text-white/50 uppercase tracking-wider text-[10px]">
+                                                <th className="p-4 font-semibold">Usuário</th>
+                                                <th className="p-4 font-semibold">Email</th>
+                                                <th className="p-4 font-semibold text-center">Créditos</th>
+                                                <th className="p-4 font-semibold text-center">Ações</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-white/5">
+                                            {allUsers.map(u => (
+                                                <tr key={u.id} className="hover:bg-white/5 transition-colors">
+                                                    <td className="p-4 font-medium flex items-center gap-3">
+                                                        {u.photoURL ? <img src={u.photoURL} className="w-6 h-6 rounded-full" /> : <div className="w-6 h-6 rounded-full bg-white/10" />}
+                                                        {u.displayName || 'Sem nome'}
+                                                        {u.role === 'admin' && <span className="px-2 py-0.5 bg-ai-accent-3/20 text-ai-accent-3 text-[9px] rounded-full uppercase font-bold">Admin</span>}
+                                                    </td>
+                                                    <td className="p-4 text-white/70">{u.email}</td>
+                                                    <td className="p-4 text-center font-mono text-lg font-bold text-ai-accent-2">{u.role === 'admin' ? '∞' : u.credits}</td>
+                                                    <td className="p-4 text-center">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <button onClick={() => updateCredits(u.id, 1)} className="p-2 bg-success/20 hover:bg-success/40 text-success rounded-xl transition-colors no-tap-highlight" title="Adicionar 1 Crédito">
+                                                                <Plus className="w-4 h-4" />
+                                                            </button>
+                                                            <button onClick={() => updateCredits(u.id, -1)} className="p-2 bg-danger/20 hover:bg-danger/40 text-danger rounded-xl transition-colors no-tap-highlight" title="Remover 1 Crédito">
+                                                                <Minus className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {allUsers.length === 0 && (
+                                                <tr>
+                                                    <td colSpan="4" className="p-8 text-center text-text-secondary">Nenhum utilizador encontrado.</td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* PagSeguro Payment Modal */}
+                    {showPaymentModal && (
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-2xl flex items-center justify-center z-[100] p-4">
+                            <div className="w-full max-w-md glass-panel p-8 rounded-[2.5rem] shadow-2xl text-center relative animate-scale-in border border-white/20">
+                                <button onClick={() => setShowPaymentModal(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X className="w-6 h-6"/></button>
+                                
+                                <div className="w-20 h-20 bg-gradient-to-tr from-ai-accent-2/20 to-ai-accent-3/20 rounded-full flex items-center justify-center mx-auto mb-6 border border-white/10 shadow-[0_0_30px_rgba(179,136,235,0.3)]">
+                                    <Coins className="w-10 h-10 text-ai-accent-2" />
+                                </div>
+                                
+                                <h2 className="text-3xl font-bold mb-3 tracking-tight">Comprar Créditos</h2>
+                                <p className="text-text-secondary text-sm mb-8 px-2 font-medium">Os seus créditos esgotaram. Adquira um pacote de créditos para continuar a usar a Inteligência Artificial do Chameleon.</p>
+                                
+                                <div className="space-y-4">
+                                    <a href="https://pagseguro.uol.com.br" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl transition-colors no-underline text-white no-tap-highlight group">
+                                        <div className="text-left">
+                                            <span className="block font-bold text-lg">10 Créditos</span>
+                                            <span className="block text-xs text-text-secondary">Perfeito para tarefas rápidas</span>
+                                        </div>
+                                        <span className="text-success font-bold text-lg group-hover:scale-105 transition-transform">R$ 15,00</span>
+                                    </a>
+                                    
+                                    <a href="https://pagseguro.uol.com.br" target="_blank" rel="noopener noreferrer" className="flex items-center justify-between p-5 bg-apple-ai text-black rounded-2xl hover:opacity-90 transition-opacity no-underline font-bold shadow-[0_0_20px_rgba(255,255,255,0.15)] no-tap-highlight group">
+                                        <div className="text-left">
+                                            <span className="block font-black text-xl">50 Créditos (PRO)</span>
+                                            <span className="block text-xs text-black/70">O melhor custo-benefício</span>
+                                        </div>
+                                        <span className="font-black text-xl group-hover:scale-105 transition-transform">R$ 50,00</span>
+                                    </a>
+                                </div>
+                                
+                                <p className="text-[10px] text-white/30 mt-8 uppercase tracking-widest font-bold">Pagamento seguro processado por PagSeguro</p>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden relative z-10 p-2 sm:p-4 gap-4 pb-8 lg:pb-4 custom-scrollbar">
+                        
+                        {/* Main Canvas Area */}
+                        <div className={`flex flex-col flex-1 rounded-[2.5rem] overflow-hidden glass-panel relative ${currentImage ? 'min-h-[55vh] lg:min-h-0' : 'min-h-[70vh]'}`}>
+                            
+                            {/* Error Toast */}
+                            {error && (
+                                <div className="absolute top-4 left-4 right-4 bg-danger/90 backdrop-blur-md border border-danger/50 text-white p-4 rounded-2xl z-[60] text-sm font-semibold flex items-center justify-between shadow-2xl animate-fade-in">
+                                    <div className="flex items-center gap-3">
+                                        <X className="w-5 h-5 p-1 bg-white/20 rounded-full" />
+                                        <span>{error}</span>
+                                    </div>
+                                    <button onClick={() => setError(null)} className="p-1 hover:bg-white/20 rounded-full transition-colors"><X className="w-4 h-4"/></button>
+                                </div>
+                            )}
+
+                            <div 
+                                ref={imageContainerRef}
+                                className="flex-1 relative overflow-hidden flex items-center justify-center group touch-none"
+                            >
+                                {(isAnalyzing || isEditing || isExporting) && (
+                                    <div className="absolute inset-0 bg-black/50 backdrop-blur-xl z-50 flex flex-col items-center justify-center">
+                                        <div className="relative w-16 h-16 flex items-center justify-center mb-4">
+                                            <div className="absolute inset-0 border-4 border-white/20 rounded-full"></div>
+                                            <div className="absolute inset-0 border-4 border-transparent border-t-white rounded-full animate-spin"></div>
+                                            <Sparkles className="w-6 h-6 text-white animate-pulse" />
+                                        </div>
+                                        <p className="font-semibold text-white text-sm tracking-wide">
+                                            {isAnalyzing ? 'Processando Inteligência...' : isEditing ? 'Aplicando Edições...' : 'Preparando Exportação...'}
+                                        </p>
+                                    </div>
+                                )}
+
+                                {currentImage && (
+                                    <div className="absolute inset-0 p-4 lg:p-8 flex items-center justify-center min-h-0 min-w-0">
+                                        <div className="relative inline-flex max-w-full max-h-full shadow-2xl rounded-xl ring-1 ring-white/10">
+                                            <img 
+                                                src={`data:${currentImage.mimeType};base64,${currentImage.base64}`} 
+                                                className="max-w-full max-h-full object-contain pointer-events-none rounded-xl"
+                                                style={{ maxHeight: '100%', maxWidth: '100%' }}
+                                                alt="Canvas"
+                                            />
+                                            {/* Editable Layers Overlay */}
+                                            {!isAnalyzing && !isEditing && editableElements.map(el => (
+                                                <div
+                                                    key={el.id}
+                                                    className={`absolute border transition-all rounded-lg shadow-sm ${selectedLayerId === el.id ? 'border-white bg-white/10 shadow-[0_0_15px_rgba(255,255,255,0.3)] z-20' : 'border-transparent hover:border-white/40 z-10'}`}
+                                                    style={{
+                                                        left: `${el.boundingBox.x * 100}%`,
+                                                        top: `${el.boundingBox.y * 100}%`,
+                                                        width: `${el.boundingBox.width * 100}%`,
+                                                        height: `${el.boundingBox.height * 100}%`,
+                                                        cursor: activeDrag ? 'grabbing' : 'grab'
+                                                    }}
+                                                    onMouseDown={(e) => { setSelectedLayerId(el.id); handleDragStart(e, el.id, 'move'); }}
+                                                    onTouchStart={(e) => { setSelectedLayerId(el.id); handleDragStart(e, el.id, 'move'); }}
+                                                >
+                                                    {selectedLayerId === el.id && (
+                                                        <div 
+                                                            className="absolute -bottom-2 -right-2 w-5 h-5 bg-white border border-black/20 rounded-full cursor-se-resize shadow-lg flex items-center justify-center"
+                                                            onMouseDown={(e) => { e.stopPropagation(); handleDragStart(e, el.id, 'resize'); }}
+                                                            onTouchStart={(e) => { e.stopPropagation(); handleDragStart(e, el.id, 'resize'); }}
+                                                        >
+                                                            <div className="w-2 h-2 bg-black rounded-full opacity-50"></div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {workflow.status === 'questionnaire' && (
+                                    <div className="absolute inset-0 bg-black/60 backdrop-blur-2xl flex items-center justify-center z-40 p-4 sm:p-6 overflow-y-auto custom-scrollbar">
+                                        <div className="w-full max-w-md glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-2xl animate-scale-in border border-white/20">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-white to-white/60 tracking-tight">DNA de Estilo</h3>
+                                                <button onClick={() => setWorkflow({ status: 'idle' })} className="w-8 h-8 flex items-center justify-center bg-white/10 rounded-full text-text-secondary hover:text-white hover:bg-white/20 transition-colors"><X className="w-4 h-4"/></button>
+                                            </div>
+                                            <p className="text-sm text-text-secondary mb-6 font-medium">Forneça os detalhes para gerar uma nova arte com a mesma essência visual desta imagem.</p>
+                                            
+                                            <div className="space-y-4">
+                                                {[
+                                                    { id: 'nicho', label: 'Nicho / Tema', placeholder: 'Ex: Evento Tech, Festival de Música...' },
+                                                    { id: 'titulo', label: 'Título Principal', placeholder: 'O nome em destaque' },
+                                                    { id: 'data', label: 'Data', placeholder: 'Ex: 20 de Outubro' },
+                                                    { id: 'horario', label: 'Horário', placeholder: 'Ex: 19:00h' },
+                                                    { id: 'local', label: 'Local / Endereço', placeholder: 'Onde será?' }
+                                                ].map(field => (
+                                                    <div key={field.id} className={field.id === 'data' || field.id === 'horario' ? 'inline-block w-[48%] mr-[4%] last:mr-0' : 'block'}>
+                                                        <label className="block text-xs text-text-secondary mb-1.5 font-medium ml-1">{field.label}</label>
+                                                        <input 
+                                                            type="text" 
+                                                            placeholder={field.placeholder}
+                                                            value={workflow.responses?.[field.id] || ''}
+                                                            onChange={e => setWorkflow(prev => ({ ...prev, responses: { ...prev.responses, [field.id]: e.target.value } }))}
+                                                            className="w-full bg-black/30 border border-white/10 rounded-2xl p-3.5 text-sm text-white focus:outline-none focus:border-white/30 focus:bg-white/5 transition-all shadow-inner"
+                                                        />
+                                                    </div>
+                                                ))}
+                                                <div>
+                                                    <label className="block text-xs text-text-secondary mb-1.5 font-medium ml-1">Outras Informações</label>
+                                                    <textarea 
+                                                        placeholder="Preços, convidados, redes sociais..."
+                                                        value={workflow.responses?.outros || ''}
+                                                        onChange={e => setWorkflow(prev => ({ ...prev, responses: { ...prev.responses, outros: e.target.value } }))}
+                                                        className="w-full bg-black/30 border border-white/10 rounded-2xl p-3.5 text-sm text-white focus:outline-none focus:border-white/30 focus:bg-white/5 transition-all shadow-inner custom-scrollbar"
+                                                        rows={2}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-8 flex gap-3">
+                                                <button 
+                                                    onClick={() => setWorkflow({ status: 'idle' })}
+                                                    className="flex-1 py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-white font-semibold transition-colors no-tap-highlight"
+                                                >
+                                                    Cancelar
+                                                </button>
+                                                <button 
+                                                    onClick={handleConfirmReplication}
+                                                    className="flex-1 py-3.5 bg-apple-ai text-black rounded-2xl font-bold hover:opacity-90 transition-opacity shadow-[0_0_20px_rgba(255,255,255,0.1)] no-tap-highlight"
+                                                >
+                                                    Gerar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {!currentImage && (
+                                    <div className="text-center p-8 sm:p-12 w-full max-w-lg mx-auto">
+                                        <div className="w-28 h-28 glass-surface rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-xl shadow-black/40 relative group">
+                                            <div className="absolute inset-0 rounded-[2.5rem] bg-gradient-to-tr from-white/5 to-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                                            <UploadCloud className="w-12 h-12 text-white/80" />
+                                        </div>
+                                        <h2 className="text-3xl font-bold mb-3 tracking-tight">Criar Novo Projeto</h2>
+                                        <p className="text-text-secondary mb-10 text-sm sm:text-base font-medium px-4">Faça upload da imagem que deseja analisar e editar no estúdio.</p>
+                                        <label className="px-8 py-4 bg-white text-black font-semibold rounded-full cursor-pointer hover:scale-105 active:scale-95 transition-all inline-flex items-center gap-3 shadow-[0_0_30px_rgba(255,255,255,0.15)] no-tap-highlight">
+                                            <ImageIcon className="w-5 h-5" /> Selecionar Imagem
+                                            <input type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Inspiration Search (Only if no image) */}
+                            {!currentImage && (
+                                <div className="p-4 sm:p-6 sm:m-6 mt-0 glass-surface rounded-[2rem] mx-4 mb-4 border-t border-white/5 lg:border-t-0">
+                                    <div className="flex items-center gap-3 mb-4">
+                                        <div className="p-2 bg-white/10 rounded-xl"><Search className="w-4 h-4 text-white" /></div>
+                                        <h3 className="font-semibold text-sm">Explorar Inspirações</h3>
+                                    </div>
+                                    <div className="flex flex-col sm:flex-row gap-3">
+                                        <input 
+                                            type="text"
+                                            value={inspirationQuery}
+                                            onChange={e => setInspirationQuery(e.target.value)}
+                                            placeholder="Ex: Pôster cyberpunk, Cardápio minimalista..."
+                                            className="flex-1 bg-black/40 border border-white/10 px-5 py-3.5 rounded-2xl focus:outline-none focus:border-white/30 text-sm shadow-inner transition-colors"
+                                            onKeyDown={e => e.key === 'Enter' && handleInspirationSearch()}
+                                        />
+                                        <button 
+                                            onClick={handleInspirationSearch}
+                                            disabled={isSearching}
+                                            className="py-3.5 px-6 sm:w-auto w-full bg-white/10 hover:bg-white/20 text-white font-semibold rounded-2xl transition-all disabled:opacity-50 no-tap-highlight whitespace-nowrap"
+                                        >
+                                            {isSearching ? <RefreshCw className="w-5 h-5 animate-spin mx-auto" /> : 'Buscar Ideias'}
+                                        </button>
+                                    </div>
+                                    {inspirationResults.length > 0 && (
+                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 animate-fade-in">
+                                            {inspirationResults.map(img => (
+                                                <button 
+                                                    key={img.id}
+                                                    onClick={() => startAnalysis({ base64: img.base64, mimeType: img.mimeType })}
+                                                    className="aspect-square rounded-[1.5rem] overflow-hidden border border-white/10 hover:border-white/40 hover:scale-[1.02] transition-all shadow-lg no-tap-highlight"
+                                                >
+                                                    <img src={`data:${img.mimeType};base64,${img.base64}`} className="w-full h-full object-cover" />
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Sidebar Tools Panel */}
+                        {currentImage && (
+                            <aside className="w-full lg:w-[380px] xl:w-[420px] flex-shrink-0 glass-panel rounded-[2.5rem] flex flex-col shadow-2xl relative z-20">
+                                <div className="p-5 border-b border-white/5 flex justify-between items-center bg-white/[0.01] rounded-t-[2.5rem]">
+                                    <h2 className="font-bold text-sm tracking-wide">Ferramentas</h2>
+                                    <div className="flex gap-2">
+                                        <button onClick={handleStartReplication} className="w-9 h-9 flex items-center justify-center bg-white/5 hover:bg-white/15 rounded-xl transition-colors no-tap-highlight" title="Replicar Estilo (DNA)">
+                                            <Sparkles className="w-4 h-4 text-ai-accent-3" />
+                                        </button>
+                                        <button onClick={handleAddTextLayer} className="w-9 h-9 flex items-center justify-center bg-white/5 hover:bg-white/15 rounded-xl transition-colors no-tap-highlight" title="Adicionar Texto">
+                                            <Code className="w-4 h-4 text-white" />
+                                        </button>
+                                        <button onClick={handleStartOver} className="w-9 h-9 flex items-center justify-center bg-white/5 hover:bg-danger/20 hover:text-danger rounded-xl transition-colors no-tap-highlight text-text-secondary" title="Recomeçar">
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-6">
+                                    {/* Layers List */}
+                                    <div>
+                                        <div className="flex items-center justify-between mb-3 px-1">
+                                            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-0">Camadas ({editableElements.length})</h3>
+                                        </div>
+                                        <div className="space-y-2.5">
+                                            {editableElements.map(el => (
+                                                <div key={el.id} className="flex items-center gap-2 group/layer relative">
+                                                    <button 
+                                                        onClick={() => setSelectedLayerId(el.id)}
+                                                        className={`flex-1 flex items-center gap-3 p-3 rounded-2xl border transition-all text-left no-tap-highlight ${selectedLayerId === el.id ? 'bg-white/10 border-white/20 shadow-md' : 'bg-black/20 border-white/5 hover:bg-white/5'}`}
+                                                    >
+                                                        <div className={`p-2 rounded-xl ${selectedLayerId === el.id ? 'bg-white text-black' : 'bg-white/5 text-text-secondary'}`}>
+                                                            {el.content !== undefined ? <Pencil className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}
+                                                        </div>
+                                                        <span className="text-[13px] font-medium truncate flex-1">{el.content || el.description}</span>
+                                                    </button>
+                                                    <button 
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setEditableElements(prev => prev.filter(item => item.id !== el.id));
+                                                            if (selectedLayerId === el.id) setSelectedLayerId(null);
+                                                        }}
+                                                        className="absolute right-3 p-2 bg-black/50 backdrop-blur-md rounded-full text-text-secondary hover:text-danger hover:bg-danger/20 opacity-0 group-hover/layer:opacity-100 transition-all shadow-sm"
+                                                        title="Remover"
+                                                    >
+                                                        <X className="w-3 h-3" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            {editableElements.length === 0 && (
+                                                <div className="text-center py-6 text-text-secondary text-sm glass-surface rounded-2xl border-dashed">
+                                                    Nenhuma camada detectada.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Layer Properties */}
+                                    {selectedLayerId && (
+                                        <div className="animate-scale-in">
+                                            <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3 px-1">Propriedades</h3>
+                                            <div className="p-4 bg-black/20 border border-white/5 rounded-3xl space-y-4">
+                                                {editableElements.find(el => el.id === selectedLayerId)?.content !== undefined ? (
+                                                    <div>
+                                                        <label className="block text-xs text-text-secondary mb-2 font-medium ml-1">Conteúdo do Texto</label>
+                                                        <textarea 
+                                                            value={stagedUserTexts[selectedLayerId] || ''}
+                                                            onChange={e => setStagedUserTexts(prev => ({ ...prev, [selectedLayerId]: e.target.value }))}
+                                                            className="w-full bg-white/5 border border-white/10 p-3.5 rounded-2xl text-sm focus:outline-none focus:border-white/30 transition-all custom-scrollbar resize-none"
+                                                            rows={3}
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-center py-3">
+                                                        <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-3">
+                                                            <ImageIcon className="w-5 h-5 text-white/50" />
+                                                        </div>
+                                                        <p className="text-xs text-text-secondary mb-4 px-2">Arraste a caixa na imagem para reposicionar este elemento ou o substitua abaixo.</p>
+                                                        <button 
+                                                            onClick={() => fileInputRefs.current[selectedLayerId]?.click()}
+                                                            className="w-full py-3 bg-white/10 border border-white/5 rounded-2xl text-xs font-semibold hover:bg-white/20 transition-colors flex items-center justify-center gap-2 no-tap-highlight"
+                                                        >
+                                                            <RefreshCw className="w-4 h-4" /> Trocar Imagem (Objeto/Pessoa)
+                                                        </button>
+                                                        <input 
+                                                            type="file" 
+                                                            className="hidden" 
+                                                            ref={el => fileInputRefs.current[selectedLayerId] = el}
+                                                            onChange={(e) => {
+                                                                const file = e.target.files[0];
+                                                                if (file) {
+                                                                    const reader = new FileReader();
+                                                                    reader.onload = () => {
+                                                                        const base64 = reader.result.split(',')[1];
+                                                                        setStagedPeopleReplacements(prev => ({ ...prev, [selectedLayerId]: { base64, mimeType: file.type } }));
+                                                                    };
+                                                                    reader.readAsDataURL(file);
+                                                                }
+                                                            }}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* General Adjustments */}
+                                    <div>
+                                        <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3 px-1">Ajuste Global (Prompt)</h3>
+                                        <textarea 
+                                            value={stagedGeneralPrompt}
+                                            onChange={e => setStagedGeneralPrompt(e.target.value)}
+                                            placeholder="Ex: Altere o fundo para uma paleta noturna neon..."
+                                            className="w-full bg-black/20 border border-white/5 p-4 rounded-3xl text-sm focus:outline-none focus:border-white/20 focus:bg-white/5 transition-all custom-scrollbar resize-none"
+                                            rows={3}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Footer Actions (Sticky Bottom in Sidebar) */}
+                                <div className="p-5 border-t border-white/5 bg-white/[0.01] rounded-b-[2.5rem] space-y-3">
+                                    <button 
+                                        onClick={handleApplyAllChanges}
+                                        disabled={isEditing || isAnalyzing}
+                                        className="w-full py-4 bg-apple-ai text-black font-bold rounded-2xl hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 shadow-[0_4px_20px_rgba(255,255,255,0.1)] disabled:opacity-50 no-tap-highlight"
+                                    >
+                                        <Check className="w-5 h-5" /> Aplicar Alterações
+                                    </button>
+                                    
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button 
+                                            onClick={handleExportLayers}
+                                            disabled={isEditing || isAnalyzing || !currentImage}
+                                            className="py-3 bg-white/5 border border-white/5 text-xs font-semibold rounded-2xl hover:bg-white/10 transition-colors flex items-center justify-center gap-2 disabled:opacity-30 no-tap-highlight"
+                                        >
+                                            <Layers className="w-4 h-4" /> Separar Camadas
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                const link = document.createElement('a');
+                                                link.href = `data:${currentImage.mimeType};base64,${currentImage.base64}`;
+                                                link.download = 'chameleon-export.png';
+                                                link.click();
+                                            }}
+                                            className="py-3 bg-white/5 border border-white/5 text-xs font-semibold rounded-2xl hover:bg-white/10 transition-colors flex items-center justify-center gap-2 no-tap-highlight"
+                                        >
+                                            <DownloadIcon className="w-4 h-4" /> Salvar Arte
+                                        </button>
+                                    </div>
+                                </div>
+                            </aside>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<ChameleonView />);
+    </script>
+</body>
+</html>
