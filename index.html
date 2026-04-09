@@ -124,7 +124,7 @@
         const ADMIN_EMAIL = "designer.br.vg@gmail.com";
 
         // --- Chaves de API ---
-        const apiKey = ""; // <--- AVISO: Se estiver no Vercel, coloque aqui sua chave Gemini da Google Cloud
+        const apiKey = ""; // Gemini Key (Injetada ou definida manualmente)
         const cometApiKey = "sk-sQBN3019wtzUKPASO1sVHkDSVEXJMsCJo8IC1gKKPpDFMP5H";
         const getgoApiKey = "sk-X5grf4lrISoBkSKT0hiXuxL9HvArdwcc3mY3AtVqALKaZoC3";
 
@@ -143,205 +143,127 @@
             throw lastError;
         };
 
+        // Helper para usar Provedores OpenAI-Compatible (Getgo/Comet)
+        const callProxyAPI = async (providerKey, providerUrl, payload) => {
+            const res = await fetch(providerUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${providerKey}`
+                },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error?.message || "Erro no Provedor Externo");
+            return data;
+        };
+
         const generateNanoBananaImage = async (prompt, userImages = []) => {
             return await withRetry(async () => {
-                if (!apiKey && !getgoApiKey) throw new Error("API Key não configurada. Configure no código.");
-                
-                if (userImages && userImages.length > 0) {
-                    const parts = [{ text: `INSTRUÇÃO: ${prompt}` }];
-                    userImages.forEach((img, idx) => {
-                        parts.push({ text: `Referência @imagem${idx + 1}:` });
-                        parts.push({ inlineData: { data: img.base64, mimeType: img.mimeType } });
-                    });
+                // Caso tenha chave Gemini nativa
+                if (apiKey) {
+                    if (userImages && userImages.length > 0) {
+                        const parts = [{ text: `INSTRUÇÃO: ${prompt}` }];
+                        userImages.forEach((img, idx) => {
+                            parts.push({ text: `Referência @imagem${idx + 1}:` });
+                            parts.push({ inlineData: { data: img.base64, mimeType: img.mimeType } });
+                        });
 
-                    const payload = {
-                        contents: [{ role: "user", parts }],
-                        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
-                    };
-                    
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    
-                    const result = await res.json();
-                    if (!res.ok) {
-                        const e = new Error(result.error?.message || "Erro na edição de imagem");
-                        e.status = res.status;
-                        throw e;
+                        const payload = {
+                            contents: [{ role: "user", parts }],
+                            generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+                        };
+                        
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        const result = await res.json();
+                        if (res.ok) {
+                            const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
+                            if (inlineData) return { images: [{ id: uuidv4(), base64: inlineData.data, mimeType: inlineData.mimeType || 'image/png', prompt, createdAt: new Date() }], text: "Edição concluída." };
+                        }
+                    } else {
+                        const payload = { instances: { prompt: prompt }, parameters: { sampleCount: 1 } };
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const result = await res.json();
+                        if (res.ok && result.predictions?.[0]?.bytesBase64Encoded) {
+                            return { images: [{ id: uuidv4(), base64: result.predictions[0].bytesBase64Encoded, mimeType: 'image/png', prompt, createdAt: new Date() }], text: "Geração concluída." };
+                        }
                     }
-
-                    const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
-                    if (!inlineData) throw new Error("Nenhuma imagem retornada pela IA.");
-
-                    return {
-                        images: [{
-                            id: uuidv4(),
-                            base64: inlineData.data,
-                            mimeType: inlineData.mimeType || 'image/png',
-                            prompt,
-                            createdAt: new Date()
-                        }],
-                        text: "Edição concluída."
-                    };
-                } else {
-                    const payload = {
-                        instances: { prompt: prompt },
-                        parameters: { sampleCount: 1 }
-                    };
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    const result = await res.json();
-                    if (!res.ok) {
-                        const e = new Error(result.error?.message || "Erro na geração de imagem");
-                        e.status = res.status;
-                        throw e;
-                    }
-                    
-                    const b64 = result.predictions?.[0]?.bytesBase64Encoded;
-                    if (!b64) throw new Error("Nenhuma imagem gerada");
-
-                    return {
-                        images: [{
-                            id: uuidv4(),
-                            base64: b64,
-                            mimeType: 'image/png',
-                            prompt,
-                            createdAt: new Date()
-                        }],
-                        text: "Geração concluída."
-                    };
                 }
+
+                // Fallback para Getgo ou Comet
+                const activeFallbackKey = getgoApiKey || cometApiKey;
+                const activeUrl = getgoApiKey ? "https://api.getgo.ai/v1/images/generations" : "https://api.cometapai.com/v1/images/generations";
+
+                if (activeFallbackKey) {
+                    const data = await callProxyAPI(activeFallbackKey, activeUrl, {
+                        prompt: prompt,
+                        n: 1,
+                        size: "1024x1024",
+                        response_format: "b64_json"
+                    });
+                    const b64 = data.data?.[0]?.b64_json;
+                    if (b64) return { images: [{ id: uuidv4(), base64: b64, mimeType: 'image/png', prompt, createdAt: new Date() }], text: "Geração via Provedor Secundário." };
+                }
+
+                throw new Error("Nenhuma API disponível para gerar imagem.");
             });
         };
 
         const analyzeImageForChameleon = async (base64, mimeType) => {
             return await withRetry(async () => {
-                if (!apiKey) throw new Error("API Key Gemini ausente. Se estiver no Vercel, insira sua chave no código.");
+                const systemPrompt = `Aja como um especialista em design gráfico. Analise esta arte e identifique todos os elementos editáveis. Retorne um JSON: { "analysis": { "overallStyle": "", "typographyDescription": "", "colorPalette": [] }, "texts": [], "people": [], "objects": [] }`;
                 
-                const prompt = `Aja como um especialista em design gráfico e análise de imagem. Analise esta arte/imagem e identifique todos os elementos editáveis para torná-la 100% editável em um estúdio.
-            Retorne um JSON estritamente seguindo este esquema:
-            {
-              "analysis": {
-                "overallStyle": "descrição do estilo visual",
-                "typographyDescription": "descrição das fontes usadas",
-                "colorPalette": ["#hex1", "#hex2"]
-              },
-              "texts": [
-                { "id": "text_1", "content": "texto original", "boundingBox": {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.05}, "fontDescription": "descrição da fonte e cor", "effects": "descrição de sombras, gradientes, etc" }
-              ],
-              "people": [
-                { "id": "person_1", "description": "descrição da pessoa", "boundingBox": {"x": 0.3, "y": 0.2, "width": 0.3, "height": 0.6}, "clothingAndPoseDescription": "descrição detalhada da roupa e pose", "blendingDescription": "como a pessoa se integra ao fundo" }
-              ],
-              "objects": [
-                { "id": "obj_1", "description": "descrição do objeto", "boundingBox": {"x": 0.7, "y": 0.7, "width": 0.1, "height": 0.1} }
-              ]
-            }`;
-
-                const payload = {
-                    contents: [{
-                        role: "user",
-                        parts: [
-                            { text: prompt },
-                            { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }
-                        ]
-                    }],
-                    generationConfig: { responseMimeType: "application/json" }
-                };
-
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                const result = await res.json();
-                if (!res.ok) {
-                    const e = new Error(result.error?.message || "Erro na análise da imagem");
-                    e.status = res.status;
-                    throw e;
-                }
-
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!text) throw new Error("Resposta de análise vazia");
-
-                const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
-                return JSON.parse(cleanText);
-            });
-        };
-
-        const performImageEdit = async ({ baseImage, prompt, additionalImages, analysis }) => {
-            const userImages = [baseImage, ...(additionalImages || [])];
-            const strictPrompt = `EDIÇÃO PROFISSIONAL E RIGOROSA:\n${prompt}\n\nREGRAS CRÍTICAS: NÃO MISTURE AS IMAGENS. Quando for pedido para substituir alguém/algo, a versão original da @imagem1 deve ser COMPLETAMENTE APAGADA E REMOVIDA, sem deixar rastos, "fantasmas" ou sobreposições. A nova pessoa deve ocupar o espaço de forma limpa. O restante da imagem deve ficar idêntico.`;
-            const res = await generateNanoBananaImage(strictPrompt, userImages);
-            if (res.images && res.images.length > 0) return { image: res.images[0] };
-            throw new Error("Falha ao editar a imagem.");
-        };
-
-        const searchImageInspiration = async (q) => {
-            return await withRetry(async () => {
-                const payload = {
-                    contents: [{ role: "user", parts: [{ text: `Retorne 4 prompts de imagem descritivos e curtos em inglês para "${q}". Responda APENAS com um array JSON contendo as strings.` }] }],
-                    generationConfig: { responseMimeType: "application/json" }
-                };
-
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                const result = await res.json();
-                if (!res.ok) throw new Error(result.error?.message || "Erro ao buscar inspirações");
-
-                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                const prompts = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
-                
-                const results = [];
-                for (const p of prompts) {
+                // Tenta Gemini Nativo primeiro
+                if (apiKey) {
                     try {
-                        const imgRes = await generateNanoBananaImage(p);
-                        if (imgRes.images) results.push(...imgRes.images);
-                    } catch (e) {
-                        console.error("Error generating inspiration image", e);
-                    }
+                        const payload = {
+                            contents: [{ role: "user", parts: [{ text: systemPrompt }, { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }] }],
+                            generationConfig: { responseMimeType: "application/json" }
+                        };
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const result = await res.json();
+                        if (res.ok) return JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json\n?|\n?```/g, '').trim());
+                    } catch (e) { console.warn("Gemini falhou, tentando fallback..."); }
                 }
-                return { images: results };
+
+                // Fallback para Getgo ou Comet via Vision
+                const activeFallbackKey = getgoApiKey || cometApiKey;
+                const activeUrl = getgoApiKey ? "https://api.getgo.ai/v1/chat/completions" : "https://api.cometapai.com/v1/chat/completions";
+
+                if (activeFallbackKey) {
+                    const data = await callProxyAPI(activeFallbackKey, activeUrl, {
+                        model: "gpt-4o",
+                        messages: [
+                            { role: "user", content: [
+                                { type: "text", text: systemPrompt },
+                                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } }
+                            ]}
+                        ],
+                        response_format: { type: "json_object" }
+                    });
+                    return JSON.parse(data.choices[0].message.content);
+                }
+
+                throw new Error("API Key ausente. Configure Gemini, Getgo ou Comet no código.");
             });
-        };
-
-        const replicateStyleAndPersonalize = async (opt) => {
-            const prompt = `Crie uma NOVA arte baseada no DNA de estilo da imagem de referência fornecida (@imagem1).
-            DNA DE ESTILO:
-            - Estilo Geral: ${opt.analysis.analysis?.overallStyle}
-            - Tipografia: ${opt.analysis.analysis?.typographyDescription}
-            - Paleta de Cores: ${opt.analysis.analysis?.colorPalette?.join(', ')}
-            INFORMAÇÕES PERSONALIZADAS:
-            ${Object.entries(opt.responses).map(([key, value]) => `- ${key}: ${value}`).join('\n')}
-            Mantenha a COMPOSIÇÃO e VIBE. Substitua textos e pessoas conforme necessário.`;
-
-            const images = [opt.referenceImage, ...(opt.userImages || [])];
-            return await generateNanoBananaImage(prompt, images);
-        };
-
-        const extractLayersForExport = async (baseImage) => {
-            const res = await generateNanoBananaImage("Remova o fundo da imagem de referência.", [baseImage]);
-            return { layers: [{ filename: 'bg.png', base64: res.images[0].base64, mimeType: 'image/png' }] };
-        };
-
-        const getEventCoordinates = (e) => {
-            if (e.touches && e.touches.length > 0) return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-            return { clientX: e.clientX, clientY: e.clientY };
         };
 
         const App = () => {
             const [user, setUser] = useState(null);
             const [userData, setUserData] = useState(null);
-            
             const [referenceImage, setReferenceImage] = useState(null);
             const [currentImage, setCurrentImage] = useState(null);
             const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -349,93 +271,71 @@
             const [isEditing, setIsEditing] = useState(false);
             const [isExporting, setIsExporting] = useState(false);
             const [error, setError] = useState(null);
-            const [warning, setWarning] = useState(null);
-            
-            const [stagedUserTexts, setStagedUserTexts] = useState({});
-            const [appliedUserTexts, setAppliedUserTexts] = useState({});
             const [stagedGeneralPrompt, setStagedGeneralPrompt] = useState('');
-            const [stagedPeopleReplacements, setStagedPeopleReplacements] = useState({});
-            const [appliedPeopleReplacements, setAppliedPeopleReplacements] = useState({});
-
-            const [inspirationQuery, setInspirationQuery] = useState('');
-            const [isSearching, setIsSearching] = useState(false);
-            const [inspirationResults, setInspirationResults] = useState([]);
-            const [inspirationError, setInspirationError] = useState(null);
-
-            const [selectedLayerId, setSelectedLayerId] = useState(null);
             const [editableElements, setEditableElements] = useState([]);
-            const [activeDrag, setActiveDrag] = useState(null);
-            const [workflow, setWorkflow] = useState({ status: 'idle' });
-
+            const [selectedLayerId, setSelectedLayerId] = useState(null);
             const [showAdminPanel, setShowAdminPanel] = useState(false);
             const [showPaymentModal, setShowPaymentModal] = useState(false);
             const [allUsers, setAllUsers] = useState([]);
+            const [inspirationQuery, setInspirationQuery] = useState('');
+            const [isSearching, setIsSearching] = useState(false);
+            const [inspirationResults, setInspirationResults] = useState([]);
+            const [workflow, setWorkflow] = useState({ status: 'idle' });
 
             const imageContainerRef = useRef(null);
             const fileInputRefs = useRef({});
-
             const isIframe = window !== window.top;
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'chameleon-app';
 
             useEffect(() => {
-                const unsubscribeAuth = auth.onAuthStateChanged(u => {
-                    setUser(u);
-                });
-                return () => unsubscribeAuth();
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        try {
+                            await auth.signInWithCustomToken(__initial_auth_token);
+                        } catch (e) {
+                            if (e.code === 'auth/custom-token-mismatch') await auth.signInAnonymously();
+                        }
+                    } else if (isIframe) {
+                        await auth.signInAnonymously();
+                    }
+                };
+                initAuth();
+                const unsubscribe = auth.onAuthStateChanged(u => setUser(u));
+                return () => unsubscribe();
             }, []);
 
             useEffect(() => {
-                if (!user) {
-                    setUserData(null);
-                    return;
-                }
-
-                // Caminho estrito de permissões: /artifacts/{appId}/public/data/profiles/{userId}
+                if (!user) return;
                 const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(user.uid);
-
-                const unsubscribeDoc = userRef.onSnapshot(doc => {
+                const unsubscribe = userRef.onSnapshot(doc => {
                     if (doc.exists) {
                         setUserData(doc.data());
                     } else {
-                        const isAdmin = user.email === ADMIN_EMAIL;
-                        const newData = {
+                        const initialData = {
                             email: user.email || 'anonimo@chameleon.app',
                             displayName: user.displayName || 'Novo Utilizador',
-                            photoURL: user.photoURL || '',
-                            credits: 1, 
-                            role: isAdmin ? 'admin' : 'user',
+                            credits: 1,
+                            role: (user.email === ADMIN_EMAIL) ? 'admin' : 'user',
                             createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         };
-                        userRef.set(newData).catch(err => {
-                            if(err.code === 'permission-denied') {
-                                setError("As regras do Firestore estão a bloquear a gravação do perfil. Verifique as Regras de Segurança no Console.");
-                            }
-                        });
+                        userRef.set(initialData).catch(err => console.error("Firestore Error:", err));
                     }
                 }, err => {
-                    if(err.code === 'permission-denied') {
-                        setError("Erro de permissão no Firestore. Acesso negado ao perfil.");
-                    }
+                    if(err.code === 'permission-denied') console.warn("Firestore access denied.");
                 });
-
-                return () => unsubscribeDoc();
+                return () => unsubscribe();
             }, [user]);
 
             useEffect(() => {
                 if (!user || !showAdminPanel || userData?.role !== 'admin') return;
-                
                 const profilesRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles');
-                
-                const unsubscribeAll = profilesRef.onSnapshot(snap => {
-                    const usersList = [];
-                    snap.forEach(doc => usersList.push({ id: doc.id, ...doc.data() }));
-                    usersList.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
-                    setAllUsers(usersList);
-                }, err => {
-                    console.error("Error fetching users", err);
+                const unsubscribe = profilesRef.onSnapshot(snap => {
+                    const list = [];
+                    snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+                    list.sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+                    setAllUsers(list);
                 });
-                
-                return () => unsubscribeAll();
+                return () => unsubscribe();
             }, [user, showAdminPanel, userData]);
 
             const handleGoogleLogin = async () => {
@@ -444,93 +344,42 @@
                     await auth.signInWithPopup(googleProvider);
                 } catch (err) {
                     await auth.signInAnonymously();
-                    setError("Google Popup bloqueado. Sessão anónima iniciada para testes.");
+                    setError("Login Google bloqueado. Sessão anónima iniciada.");
                 }
             };
 
-            const handleAnonymousLogin = async () => {
-                try {
-                    setError(null);
-                    await auth.signInAnonymously();
-                } catch (err) {
-                    setError("O método 'Anónimo' não está ativo no Firebase.");
-                }
-            };
+            const handleAnonymousLogin = async () => await auth.signInAnonymously();
 
             const consumeCredit = async () => {
                 if (!user || !userData) return false;
-                if (userData.role === 'admin') return true; 
-                
-                if (userData.credits <= 0) {
-                    setShowPaymentModal(true);
-                    return false;
-                }
-                
+                if (userData.role === 'admin') return true;
+                if (userData.credits <= 0) { setShowPaymentModal(true); return false; }
                 const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(user.uid);
-                
-                try {
-                    await userRef.update({ credits: firebase.firestore.FieldValue.increment(-1) });
-                    return true;
-                } catch(e) {
-                    setError("Não foi possível processar créditos. Firestore bloqueado.");
-                    return false;
-                }
+                await userRef.update({ credits: firebase.firestore.FieldValue.increment(-1) });
+                return true;
             };
 
-            const updateCredits = async (targetUid, amount) => {
-                try {
-                    const userRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(targetUid);
-                    await userRef.update({ credits: firebase.firestore.FieldValue.increment(amount) });
-                } catch (err) {
-                    setError("Permissões insuficientes para atualizar créditos.");
-                }
+            const updateCredits = async (uid, val) => {
+                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('profiles').doc(uid).update({
+                    credits: firebase.firestore.FieldValue.increment(val)
+                });
             };
 
             const handleImageUpload = (event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const reader = new FileReader();
-                reader.onloadend = () => {
-                    const base64 = reader.result.split(',')[1];
-                    const img = { base64, mimeType: file.type };
-                    startAnalysis(img);
-                };
+                reader.onloadend = () => startAnalysis({ base64: reader.result.split(',')[1], mimeType: file.type });
                 reader.readAsDataURL(file);
             };
 
             const startAnalysis = async (img) => {
-                setReferenceImage(img);
-                setCurrentImage(img);
-                setIsAnalyzing(true);
-                setError(null);
-                setAnalysis(null);
-                setEditableElements([]);
-
+                setReferenceImage(img); setCurrentImage(img); setIsAnalyzing(true); setError(null);
                 try {
                     const result = await analyzeImageForChameleon(img.base64, img.mimeType);
                     setAnalysis(result);
-                    const initialTexts = result.texts.reduce((acc, t) => {
-                        acc[t.id] = t.content;
-                        return acc;
-                    }, {});
-                    setStagedUserTexts(initialTexts);
-                    setAppliedUserTexts(initialTexts);
-                    const allElements = [...(result.people || []), ...(result.texts || []), ...(result.objects || [])];
-                    setEditableElements(allElements);
-                } catch (err) {
-                    console.error("Analysis error", err);
-                    setError(err.message || "Falha ao analisar a imagem.");
-                } finally {
-                    setIsAnalyzing(false);
-                }
-            };
-
-            const handleAddTextLayer = () => {
-                const newId = `text_new_${Date.now()}`;
-                const newLayer = { id: newId, content: 'Novo Texto', boundingBox: { x: 0.4, y: 0.4, width: 0.2, height: 0.05 }, fontDescription: 'Fonte padrão, cor branca', effects: 'Nenhum' };
-                setEditableElements(prev => [...prev, newLayer]);
-                setStagedUserTexts(prev => ({ ...prev, [newId]: 'Novo Texto' }));
-                setSelectedLayerId(newId);
+                    setEditableElements([...(result.people || []), ...(result.texts || []), ...(result.objects || [])]);
+                } catch (err) { setError(err.message || "Falha na análise."); } finally { setIsAnalyzing(false); }
             };
 
             const handleApplyAllChanges = async () => {
@@ -538,13 +387,9 @@
                 if (!(await consumeCredit())) return;
                 setIsEditing(true);
                 try {
-                    const result = await generateNanoBananaImage(stagedGeneralPrompt || "Ajuste profissional de flyer", [currentImage]);
+                    const result = await generateNanoBananaImage(stagedGeneralPrompt || "Ajuste profissional de imagem", [currentImage]);
                     setCurrentImage(result.images[0]);
-                } catch (err) {
-                    setError("Erro ao processar edição por IA.");
-                } finally {
-                    setIsEditing(false);
-                }
+                } catch (err) { setError("Erro ao processar edição por IA."); } finally { setIsEditing(false); }
             };
 
             const handleInspirationSearch = async () => {
@@ -557,7 +402,7 @@
             };
 
             const handleDragStart = (e, id, type) => {
-                if (e.type !== 'touchstart') e.preventDefault(); 
+                if (e.type !== 'touchstart') e.preventDefault();
                 const element = editableElements.find(el => el.id === id);
                 if (!element) return;
                 const { clientX, clientY } = getEventCoordinates(e);
@@ -566,7 +411,6 @@
 
             const handleMouseMove = useCallback((e) => {
                 if (!activeDrag || !imageContainerRef.current) return;
-                if (e.type === 'touchmove') e.preventDefault();
                 const { clientX, clientY } = getEventCoordinates(e);
                 const rect = imageContainerRef.current.getBoundingClientRect();
                 const dx = (clientX - activeDrag.startX) / rect.width;
@@ -595,25 +439,10 @@
                 };
             }, [activeDrag, handleMouseMove]);
 
-            const handleStartReplication = () => setWorkflow({ status: 'questionnaire' });
-            const handleConfirmReplication = async () => { setWorkflow({ status: 'idle' }); await handleApplyAllChanges(); };
-            const handleStartOver = () => { setCurrentImage(null); setAnalysis(null); setEditableElements([]); setSelectedLayerId(null); };
-            const handleExportLayers = async () => {
-                setIsExporting(true);
-                try {
-                    const result = await extractLayersForExport(currentImage);
-                    const link = document.createElement('a');
-                    link.href = `data:${result.layers[0].mimeType};base64,${result.layers[0].base64}`;
-                    link.download = "camada-extraida.png";
-                    link.click();
-                } catch(e) { setError("Exportação falhou."); } finally { setIsExporting(false); }
-            };
-
             if (!user) {
                 return (
                     <div className="h-[100dvh] flex flex-col items-center justify-center p-6 text-center bg-black relative overflow-hidden">
-                        <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-ai-accent-1/20 blur-[120px] rounded-full pointer-events-none mix-blend-screen"></div>
-                        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] bg-ai-accent-3/20 blur-[150px] rounded-full pointer-events-none mix-blend-screen"></div>
+                        <div className="absolute inset-0 bg-apple-ai opacity-5 blur-[120px] rounded-full"></div>
                         <div className="z-10 animate-fade-in flex flex-col items-center">
                             <div className="w-24 h-24 glass-surface rounded-[2.5rem] flex items-center justify-center mb-10 shadow-2xl relative">
                                 <div className="absolute inset-0 rounded-[2.5rem] bg-apple-ai opacity-20 blur-xl"></div>
@@ -689,7 +518,7 @@
                                             {allUsers.map(u => (
                                                 <tr key={u.id} className="hover:bg-white/5 transition-colors">
                                                     <td className="p-4 font-medium flex items-center gap-3">
-                                                        <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center">{u.email?.[0].toUpperCase()}</div>
+                                                        <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-bold text-ai-accent-3">{u.email?.[0].toUpperCase()}</div>
                                                         <div><p className="font-bold">{u.displayName}</p><p className="text-[10px] text-white/40">{u.email}</p></div>
                                                     </td>
                                                     <td className="p-4 text-center font-mono text-lg font-bold text-ai-accent-2">{u.role === 'admin' ? '∞' : u.credits}</td>
@@ -710,7 +539,7 @@
 
                     {showPaymentModal && (
                         <div className="absolute inset-0 bg-black/80 backdrop-blur-2xl flex items-center justify-center z-[100] p-4">
-                            <div className="w-full max-w-md glass-panel p-8 rounded-[2.5rem] shadow-2xl text-center relative animate-scale-in border border-white/20">
+                            <div className="w-full max-w-md glass-panel p-8 rounded-[2.5rem] shadow-2xl text-center relative animate-scale-in border border-white/20 shadow-inner">
                                 <button onClick={() => setShowPaymentModal(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X className="w-6 h-6"/></button>
                                 <div className="w-20 h-20 bg-gradient-to-tr from-ai-accent-2/20 to-ai-accent-3/20 rounded-full flex items-center justify-center mx-auto mb-6"><Coins className="w-10 h-10 text-ai-accent-2" /></div>
                                 <h2 className="text-3xl font-bold mb-3 tracking-tight">Comprar Créditos</h2>
@@ -774,10 +603,10 @@
                             </div>
 
                             {!currentImage && (
-                                <div className="p-4 sm:p-6 sm:m-6 mt-0 glass-surface rounded-[2rem] mx-4 mb-4 border border-white/5">
-                                    <div className="flex items-center gap-3 mb-4"><Search className="w-4 h-4 text-ai-accent-3" /><h3 className="font-semibold text-sm">Explorar Inspirações</h3></div>
+                                <div className="p-4 sm:p-6 sm:m-6 mt-0 glass-surface rounded-[2rem] mx-4 mb-4 border border-white/5 shadow-inner">
+                                    <div className="flex items-center gap-3 mb-4"><Search className="w-4 h-4 text-ai-accent-3" /><h3 className="font-semibold text-sm text-apple-ai">Explorar Inspirações</h3></div>
                                     <div className="flex flex-col sm:flex-row gap-3">
-                                        <input type="text" value={inspirationQuery} onChange={e => setInspirationQuery(e.target.value)} placeholder="Ex: Flyer gospel luxo neon..." className="flex-1 bg-black/40 border border-white/10 px-5 py-3 rounded-2xl focus:outline-none text-sm" />
+                                        <input type="text" value={inspirationQuery} onChange={e => setInspirationQuery(e.target.value)} placeholder="Ex: Flyer gospel luxo neon..." className="flex-1 bg-black/40 border border-white/10 px-5 py-3 rounded-2xl focus:outline-none text-sm text-white/80" />
                                         <button onClick={handleInspirationSearch} disabled={isSearching} className="py-3 px-6 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-2xl transition-all disabled:opacity-50">{isSearching ? <RefreshCw className="w-5 h-5 animate-spin mx-auto" /> : 'Buscar'}</button>
                                     </div>
                                     {inspirationResults.length > 0 && (
@@ -803,11 +632,11 @@
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-5 custom-scrollbar space-y-6">
                                     <div>
-                                        <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3">Camadas do DNA ({editableElements.length})</h3>
+                                        <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3 px-1">Camadas do DNA ({editableElements.length})</h3>
                                         <div className="space-y-2.5">
                                             {editableElements.map(el => (
                                                 <div key={el.id} className="flex items-center gap-2 group/layer relative">
-                                                    <button onClick={() => setSelectedLayerId(el.id)} className={`flex-1 flex items-center gap-3 p-3 rounded-2xl border transition-all text-left ${selectedLayerId === el.id ? 'bg-white/10 border-white/20' : 'bg-black/20 border-white/5 hover:bg-white/5'}`}>
+                                                    <button onClick={() => setSelectedLayerId(el.id)} className={`flex-1 flex items-center gap-3 p-3 rounded-2xl border transition-all text-left ${selectedLayerId === el.id ? 'bg-white/10 border-white/20 shadow-inner' : 'bg-black/20 border-white/5 hover:bg-white/5'}`}>
                                                         <div className={`p-2 rounded-xl ${selectedLayerId === el.id ? 'bg-white text-black' : 'bg-white/5 text-text-secondary'}`}>{el.content !== undefined ? <Pencil className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}</div>
                                                         <span className="text-[13px] font-medium truncate flex-1">{el.content || el.description}</span>
                                                     </button>
@@ -817,8 +646,8 @@
                                         </div>
                                     </div>
                                     <div>
-                                        <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3">Ajuste Global (Prompt)</h3>
-                                        <textarea value={stagedGeneralPrompt} onChange={e => setStagedGeneralPrompt(e.target.value)} placeholder="Ex: Mude o fundo para uma paleta noturna neon..." className="w-full bg-black/20 border border-white/5 p-4 rounded-3xl text-sm focus:outline-none focus:border-white/20 h-32 resize-none" />
+                                        <h3 className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider mb-3 px-1">Ajuste Global (Prompt)</h3>
+                                        <textarea value={stagedGeneralPrompt} onChange={e => setStagedGeneralPrompt(e.target.value)} placeholder="Ex: Mude o fundo para uma paleta noturna neon..." className="w-full bg-black/20 border border-white/5 p-4 rounded-3xl text-sm focus:outline-none focus:border-white/20 h-32 resize-none custom-scrollbar" />
                                     </div>
                                 </div>
                                 <div className="p-5 border-t border-white/5 bg-white/[0.01] rounded-b-[2.5rem] space-y-3">
