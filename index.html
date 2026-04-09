@@ -99,7 +99,7 @@
             Key, Settings, Trash2, UserCircle, Send, UploadCloud, X, Eye, EyeOff, Check, RefreshCw, Layers, HelpCircle, Menu, Pencil, Plus, LogOut, Shield, Coins, Minus
         } = window.lucideReact || window.LucideReact;
 
-        // --- Configuração Firebase Exata do Utilizador ---
+        // --- Configuração Firebase ---
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined') {
             firebaseConfig = JSON.parse(__firebase_config);
@@ -123,8 +123,8 @@
 
         const ADMIN_EMAIL = "designer.br.vg@gmail.com";
 
-        // --- Chaves de API ---
-        const apiKey = ""; // Gemini Key (Injetada ou definida manualmente)
+        // --- Chaves de API Provedoras ---
+        const apiKeyGemini = ""; // Gemini Key (Se vazia, usará redundância)
         const cometApiKey = "sk-sQBN3019wtzUKPASO1sVHkDSVEXJMsCJo8IC1gKKPpDFMP5H";
         const getgoApiKey = "sk-X5grf4lrISoBkSKT0hiXuxL9HvArdwcc3mY3AtVqALKaZoC3";
 
@@ -143,8 +143,8 @@
             throw lastError;
         };
 
-        // Helper para usar Provedores OpenAI-Compatible (Getgo/Comet)
-        const callProxyAPI = async (providerKey, providerUrl, payload) => {
+        // Helper para chamar APIs externas (Getgo ou Comet) compatíveis com OpenAI
+        const callExternalAI = async (providerKey, providerUrl, payload) => {
             const res = await fetch(providerUrl, {
                 method: 'POST',
                 headers: {
@@ -154,15 +154,15 @@
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error?.message || "Erro no Provedor Externo");
+            if (!res.ok) throw new Error(data.error?.message || "Erro no provedor externo.");
             return data;
         };
 
         const generateNanoBananaImage = async (prompt, userImages = []) => {
             return await withRetry(async () => {
-                // Caso tenha chave Gemini nativa
-                if (apiKey) {
-                    if (userImages && userImages.length > 0) {
+                // 1. Tentar Gemini se disponível
+                if (apiKeyGemini) {
+                    try {
                         const parts = [{ text: `INSTRUÇÃO: ${prompt}` }];
                         userImages.forEach((img, idx) => {
                             parts.push({ text: `Referência @imagem${idx + 1}:` });
@@ -174,77 +174,63 @@
                             generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
                         };
                         
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
-                        });
-                        
-                        const result = await res.json();
-                        if (res.ok) {
-                            const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
-                            if (inlineData) return { images: [{ id: uuidv4(), base64: inlineData.data, mimeType: inlineData.mimeType || 'image/png', prompt, createdAt: new Date() }], text: "Edição concluída." };
-                        }
-                    } else {
-                        const payload = { instances: { prompt: prompt }, parameters: { sampleCount: 1 } };
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKeyGemini}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
                         const result = await res.json();
-                        if (res.ok && result.predictions?.[0]?.bytesBase64Encoded) {
-                            return { images: [{ id: uuidv4(), base64: result.predictions[0].bytesBase64Encoded, mimeType: 'image/png', prompt, createdAt: new Date() }], text: "Geração concluída." };
-                        }
-                    }
+                        const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
+                        if (inlineData) return { images: [{ id: uuidv4(), base64: inlineData.data, mimeType: inlineData.mimeType || 'image/png', prompt, createdAt: new Date() }], text: "Gerado via Gemini." };
+                    } catch (e) { console.warn("Gemini falhou, tentando fallback..."); }
                 }
 
-                // Fallback para Getgo ou Comet
-                const activeFallbackKey = getgoApiKey || cometApiKey;
-                const activeUrl = getgoApiKey ? "https://api.getgo.ai/v1/images/generations" : "https://api.cometapai.com/v1/images/generations";
+                // 2. Fallback para Getgo ou Comet (DALL-E style)
+                const fallbackKey = getgoApiKey || cometApiKey;
+                const fallbackUrl = getgoApiKey ? "https://api.getgo.ai/v1/images/generations" : "https://api.cometapai.com/v1/images/generations";
 
-                if (activeFallbackKey) {
-                    const data = await callProxyAPI(activeFallbackKey, activeUrl, {
+                if (fallbackKey) {
+                    const data = await callExternalAI(fallbackKey, fallbackUrl, {
                         prompt: prompt,
                         n: 1,
                         size: "1024x1024",
                         response_format: "b64_json"
                     });
                     const b64 = data.data?.[0]?.b64_json;
-                    if (b64) return { images: [{ id: uuidv4(), base64: b64, mimeType: 'image/png', prompt, createdAt: new Date() }], text: "Geração via Provedor Secundário." };
+                    if (b64) return { images: [{ id: uuidv4(), base64: b64, mimeType: 'image/png', prompt, createdAt: new Date() }], text: "Gerado via Provedor Secundário." };
                 }
 
-                throw new Error("Nenhuma API disponível para gerar imagem.");
+                throw new Error("Nenhuma API configurada para gerar imagens.");
             });
         };
 
         const analyzeImageForChameleon = async (base64, mimeType) => {
             return await withRetry(async () => {
-                const systemPrompt = `Aja como um especialista em design gráfico. Analise esta arte e identifique todos os elementos editáveis. Retorne um JSON: { "analysis": { "overallStyle": "", "typographyDescription": "", "colorPalette": [] }, "texts": [], "people": [], "objects": [] }`;
+                const systemPrompt = `Aja como um especialista em design gráfico. Analise esta arte e identifique todos os elementos editáveis (textos, pessoas, objetos). Retorne um JSON estrito: { "analysis": { "overallStyle": "", "typographyDescription": "", "colorPalette": [] }, "texts": [], "people": [], "objects": [] }`;
                 
-                // Tenta Gemini Nativo primeiro
-                if (apiKey) {
+                // 1. Tentar Gemini se disponível
+                if (apiKeyGemini) {
                     try {
                         const payload = {
                             contents: [{ role: "user", parts: [{ text: systemPrompt }, { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64 } }] }],
                             generationConfig: { responseMimeType: "application/json" }
                         };
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKeyGemini}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
                         const result = await res.json();
                         if (res.ok) return JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json\n?|\n?```/g, '').trim());
-                    } catch (e) { console.warn("Gemini falhou, tentando fallback..."); }
+                    } catch (e) { console.warn("Análise Gemini falhou, tentando fallback..."); }
                 }
 
-                // Fallback para Getgo ou Comet via Vision
-                const activeFallbackKey = getgoApiKey || cometApiKey;
-                const activeUrl = getgoApiKey ? "https://api.getgo.ai/v1/chat/completions" : "https://api.cometapai.com/v1/chat/completions";
+                // 2. Fallback para Getgo ou Comet (Vision gpt-4o style)
+                const fallbackKey = getgoApiKey || cometApiKey;
+                const fallbackUrl = getgoApiKey ? "https://api.getgo.ai/v1/chat/completions" : "https://api.cometapai.com/v1/chat/completions";
 
-                if (activeFallbackKey) {
-                    const data = await callProxyAPI(activeFallbackKey, activeUrl, {
+                if (fallbackKey) {
+                    const data = await callExternalAI(fallbackKey, fallbackUrl, {
                         model: "gpt-4o",
                         messages: [
                             { role: "user", content: [
@@ -257,7 +243,7 @@
                     return JSON.parse(data.choices[0].message.content);
                 }
 
-                throw new Error("API Key ausente. Configure Gemini, Getgo ou Comet no código.");
+                throw new Error("API Key ausente para análise visual.");
             });
         };
 
@@ -274,6 +260,7 @@
             const [stagedGeneralPrompt, setStagedGeneralPrompt] = useState('');
             const [editableElements, setEditableElements] = useState([]);
             const [selectedLayerId, setSelectedLayerId] = useState(null);
+            const [activeDrag, setActiveDrag] = useState(null);
             const [showAdminPanel, setShowAdminPanel] = useState(false);
             const [showPaymentModal, setShowPaymentModal] = useState(false);
             const [allUsers, setAllUsers] = useState([]);
@@ -311,17 +298,18 @@
                     if (doc.exists) {
                         setUserData(doc.data());
                     } else {
+                        const isAdmin = user.email === ADMIN_EMAIL;
                         const initialData = {
                             email: user.email || 'anonimo@chameleon.app',
-                            displayName: user.displayName || 'Novo Utilizador',
+                            displayName: user.displayName || 'Utilizador',
                             credits: 1,
-                            role: (user.email === ADMIN_EMAIL) ? 'admin' : 'user',
+                            role: isAdmin ? 'admin' : 'user',
                             createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         };
                         userRef.set(initialData).catch(err => console.error("Firestore Error:", err));
                     }
                 }, err => {
-                    if(err.code === 'permission-denied') console.warn("Firestore access denied.");
+                    if(err.code === 'permission-denied') console.warn("Firestore: Permissões insuficientes.");
                 });
                 return () => unsubscribe();
             }, [user]);
@@ -344,7 +332,7 @@
                     await auth.signInWithPopup(googleProvider);
                 } catch (err) {
                     await auth.signInAnonymously();
-                    setError("Login Google bloqueado. Sessão anónima iniciada.");
+                    setError("Popup bloqueado. Sessão anónima iniciada.");
                 }
             };
 
@@ -387,7 +375,7 @@
                 if (!(await consumeCredit())) return;
                 setIsEditing(true);
                 try {
-                    const result = await generateNanoBananaImage(stagedGeneralPrompt || "Ajuste profissional de imagem", [currentImage]);
+                    const result = await generateNanoBananaImage(stagedGeneralPrompt || "Ajuste profissional de flyer", [currentImage]);
                     setCurrentImage(result.images[0]);
                 } catch (err) { setError("Erro ao processar edição por IA."); } finally { setIsEditing(false); }
             };
@@ -405,16 +393,16 @@
                 if (e.type !== 'touchstart') e.preventDefault();
                 const element = editableElements.find(el => el.id === id);
                 if (!element) return;
-                const { clientX, clientY } = getEventCoordinates(e);
-                setActiveDrag({ id, type, startX: clientX, startY: clientY, startBox: { ...element.boundingBox } });
+                const coord = (e.touches && e.touches[0]) || e;
+                setActiveDrag({ id, type, startX: coord.clientX, startY: coord.clientY, startBox: { ...element.boundingBox } });
             };
 
             const handleMouseMove = useCallback((e) => {
                 if (!activeDrag || !imageContainerRef.current) return;
-                const { clientX, clientY } = getEventCoordinates(e);
+                const coord = (e.touches && e.touches[0]) || e;
                 const rect = imageContainerRef.current.getBoundingClientRect();
-                const dx = (clientX - activeDrag.startX) / rect.width;
-                const dy = (clientY - activeDrag.startY) / rect.height;
+                const dx = (coord.clientX - activeDrag.startX) / rect.width;
+                const dy = (coord.clientY - activeDrag.startY) / rect.height;
                 setEditableElements(prev => prev.map(el => {
                     if (el.id === activeDrag.id) {
                         const nb = { ...activeDrag.startBox };
@@ -428,21 +416,38 @@
 
             useEffect(() => {
                 if (activeDrag) {
+                    const handleEnd = () => setActiveDrag(null);
                     window.addEventListener('mousemove', handleMouseMove);
-                    window.addEventListener('mouseup', () => setActiveDrag(null));
+                    window.addEventListener('mouseup', handleEnd);
                     window.addEventListener('touchmove', handleMouseMove, { passive: false });
-                    window.addEventListener('touchend', () => setActiveDrag(null));
+                    window.addEventListener('touchend', handleEnd);
+                    return () => {
+                        window.removeEventListener('mousemove', handleMouseMove);
+                        window.removeEventListener('mouseup', handleEnd);
+                        window.removeEventListener('touchmove', handleMouseMove);
+                        window.removeEventListener('touchend', handleEnd);
+                    };
                 }
-                return () => {
-                    window.removeEventListener('mousemove', handleMouseMove);
-                    window.removeEventListener('touchmove', handleMouseMove);
-                };
             }, [activeDrag, handleMouseMove]);
+
+            const handleStartReplication = () => setWorkflow({ status: 'questionnaire' });
+            const handleConfirmReplication = async () => { setWorkflow({ status: 'idle' }); await handleApplyAllChanges(); };
+            const handleStartOver = () => { setCurrentImage(null); setAnalysis(null); setEditableElements([]); setSelectedLayerId(null); };
+            const handleExportLayers = async () => {
+                setIsExporting(true);
+                try {
+                    const result = await extractLayersForExport(currentImage);
+                    const link = document.createElement('a');
+                    link.href = `data:${result.layers[0].mimeType};base64,${result.layers[0].base64}`;
+                    link.download = "camada-extraida.png";
+                    link.click();
+                } catch(e) { setError("Exportação falhou."); } finally { setIsExporting(false); }
+            };
 
             if (!user) {
                 return (
                     <div className="h-[100dvh] flex flex-col items-center justify-center p-6 text-center bg-black relative overflow-hidden">
-                        <div className="absolute inset-0 bg-apple-ai opacity-5 blur-[120px] rounded-full"></div>
+                        <div className="absolute inset-0 bg-apple-ai opacity-5 blur-[120px] rounded-full pointer-events-none"></div>
                         <div className="z-10 animate-fade-in flex flex-col items-center">
                             <div className="w-24 h-24 glass-surface rounded-[2.5rem] flex items-center justify-center mb-10 shadow-2xl relative">
                                 <div className="absolute inset-0 rounded-[2.5rem] bg-apple-ai opacity-20 blur-xl"></div>
@@ -451,19 +456,11 @@
                             <h1 className="text-5xl font-bold mb-4 tracking-tight">Chameleon</h1>
                             <p className="text-text-secondary text-lg mb-10 max-w-sm font-medium">Acesse o estúdio de edição com IA para começar a criar.</p>
                             <div className="flex flex-col gap-4 w-full max-w-xs">
-                                <button onClick={handleGoogleLogin} className="w-full px-8 py-4 bg-white text-black font-semibold rounded-full hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 shadow-[0_0_40px_rgba(255,255,255,0.15)] no-tap-highlight">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24">
-                                        <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                                        <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                                        <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                                        <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                                    </svg>
+                                <button onClick={handleGoogleLogin} className="w-full px-8 py-4 bg-white text-black font-semibold rounded-full hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 shadow-lg">
                                     Entrar com Google
                                 </button>
                                 {isIframe && (
-                                    <button onClick={handleAnonymousLogin} className="w-full px-8 py-3 bg-white/10 text-white font-medium rounded-full hover:bg-white/20 transition-all text-sm no-tap-highlight">
-                                        Testar Estúdio (Modo Anónimo)
-                                    </button>
+                                    <button onClick={handleAnonymousLogin} className="text-xs text-white/40 hover:text-white transition-colors underline">Testar Estúdio (Modo Anónimo)</button>
                                 )}
                             </div>
                             {error && <div className="mt-8 p-4 bg-danger/10 border border-danger/30 rounded-xl text-left max-w-md"><p className="text-danger text-sm font-bold mb-1">Aviso</p><p className="text-white/80 text-xs">{error}</p></div>}
@@ -486,7 +483,7 @@
                         </div>
                         <div className="flex items-center gap-2 sm:gap-4">
                             {userData?.role === 'admin' && (
-                                <button onClick={() => setShowAdminPanel(true)} className="flex items-center gap-2 px-3 py-1.5 bg-ai-accent-3/20 text-ai-accent-3 border border-ai-accent-3/30 rounded-full hover:bg-ai-accent-3/30 transition-colors text-xs font-bold no-tap-highlight">
+                                <button onClick={() => setShowAdminPanel(true)} className="flex items-center gap-2 px-3 py-1.5 bg-ai-accent-3/20 text-ai-accent-3 border border-ai-accent-3/30 rounded-full hover:bg-ai-accent-3/30 transition-colors text-xs font-bold">
                                     <Shield className="w-4 h-4" /> Admin
                                 </button>
                             )}
@@ -496,23 +493,19 @@
                                     <span className="text-xs font-bold text-white">{userData.role === 'admin' ? '∞' : userData.credits}</span>
                                 </div>
                             )}
-                            <button onClick={() => auth.signOut()} className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors no-tap-highlight"><LogOut className="w-4 h-4" /></button>
+                            <button onClick={() => auth.signOut()} className="w-10 h-10 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors"><LogOut className="w-4 h-4" /></button>
                         </div>
                     </header>
 
                     {showAdminPanel && userData?.role === 'admin' && (
                         <div className="absolute inset-0 bg-black/80 backdrop-blur-2xl flex items-center justify-center z-[100] p-4 overflow-y-auto custom-scrollbar">
-                            <div className="w-full max-w-4xl glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-2xl relative animate-scale-in border border-white/20">
+                            <div className="w-full max-w-4xl glass-panel p-6 sm:p-8 rounded-[2.5rem] shadow-2xl relative animate-scale-in border border-white/20 shadow-inner">
                                 <button onClick={() => setShowAdminPanel(false)} className="absolute top-6 right-6 text-white/50 hover:text-white"><X className="w-6 h-6"/></button>
-                                <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-transparent bg-clip-text bg-gradient-to-r from-ai-accent-3 to-white tracking-tight"><Shield className="w-7 h-7 text-ai-accent-3" /> Painel Admin</h2>
+                                <h2 className="text-2xl font-bold mb-6 flex items-center gap-3 text-apple-ai"><Shield className="w-7 h-7" /> Gestão de Utilizadores</h2>
                                 <div className="overflow-x-auto rounded-2xl border border-white/10">
                                     <table className="w-full text-left text-sm border-collapse">
-                                        <thead className="bg-white/5">
-                                            <tr className="text-white/50 uppercase tracking-wider text-[10px]">
-                                                <th className="p-4 font-semibold">Usuário</th>
-                                                <th className="p-4 font-semibold text-center">Créditos</th>
-                                                <th className="p-4 font-semibold text-center">Ações</th>
-                                            </tr>
+                                        <thead className="bg-white/5 text-white/50 text-[10px] uppercase">
+                                            <tr><th className="p-4">Utilizador</th><th className="p-4 text-center">Créditos</th><th className="p-4 text-center">Ações</th></tr>
                                         </thead>
                                         <tbody className="divide-y divide-white/5">
                                             {allUsers.map(u => (
@@ -524,8 +517,8 @@
                                                     <td className="p-4 text-center font-mono text-lg font-bold text-ai-accent-2">{u.role === 'admin' ? '∞' : u.credits}</td>
                                                     <td className="p-4 text-center">
                                                         <div className="flex items-center justify-center gap-2">
-                                                            <button onClick={() => updateCredits(u.id, 1)} className="p-2 bg-success/20 hover:bg-success/40 text-success rounded-xl transition-colors"><Plus className="w-4 h-4" /></button>
-                                                            <button onClick={() => updateCredits(u.id, -1)} className="p-2 bg-danger/20 hover:bg-danger/40 text-danger rounded-xl transition-colors"><Minus className="w-4 h-4" /></button>
+                                                            <button onClick={() => updateCredits(u.id, 1)} className="p-2 bg-success/20 hover:bg-success/40 text-success rounded-xl"><Plus className="w-4 h-4" /></button>
+                                                            <button onClick={() => updateCredits(u.id, -1)} className="p-2 bg-danger/20 hover:bg-danger/40 text-danger rounded-xl"><Minus className="w-4 h-4" /></button>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -592,11 +585,11 @@
                                     </div>
                                 ) : (
                                     <div className="text-center p-8 sm:p-12 w-full max-w-lg mx-auto">
-                                        <label className="w-28 h-28 glass-surface rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-xl cursor-pointer hover:scale-105 transition-transform group">
+                                        <label className="w-28 h-28 glass-surface rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-xl cursor-pointer hover:scale-105 transition-transform group shadow-inner border border-white/5">
                                             <UploadCloud className="w-12 h-12 text-white/80 group-hover:text-white transition-colors" />
                                             <input type="file" className="hidden" onChange={handleImageUpload} accept="image/*" />
                                         </label>
-                                        <h2 className="text-3xl font-bold mb-3">Novo Projeto</h2>
+                                        <h2 className="text-3xl font-bold mb-3 tracking-tighter">Novo Projeto</h2>
                                         <p className="text-text-secondary mb-10 text-sm font-medium">Carregue a arte original para análise automática do DNA visual.</p>
                                     </div>
                                 )}
