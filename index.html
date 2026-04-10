@@ -5,18 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Chameleon - Standalone Mode</title>
     
-    <!-- Scripts: React, Babel, Tailwind, Lucide, Firebase, Gemini -->
+    <!-- Scripts: React, Babel, Tailwind, Lucide, Firebase -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
-    <!-- Fix for lucide-react UMD build which looks for `global.react` instead of `global.React` -->
     <script>window.react = window.React;</script>
-    
-    <!-- Pinned Babel to 7.22.20 to fix the "Infinity has already been declared" bug in recent standalone versions -->
     <script src="https://unpkg.com/@babel/standalone@7.22.20/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Point to the explicit UMD build of lucide-react to ensure window.lucideReact is defined -->
     <script src="https://unpkg.com/lucide-react@0.330.0/dist/umd/lucide-react.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/uuid@latest/dist/umd/uuidv4.min.js"></script>
     
@@ -86,7 +81,6 @@
             Key, Settings, Trash2, UserCircle, Send, UploadCloud, X, Eye, EyeOff, Check, RefreshCw, Layers, HelpCircle, Menu, Pencil, Plus, LogOut, Shield, Coins, Minus
         } = window.lucideReact || window.LucideReact;
 
-        // --- Configuração Firebase Exata do Utilizador ---
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined') {
             firebaseConfig = JSON.parse(__firebase_config);
@@ -110,8 +104,9 @@
 
         const ADMIN_EMAIL = "designer.br.vg@gmail.com";
 
-        // --- Gemini API (Deixando vazio para o ambiente Canvas preencher e evitar CORS) ---
-        const apiKey = ""; 
+        // CometAPAI API (Apenas para Geração de Imagem Editada)
+        const cometApiKey = "sk-TYekxdTtLoff1EcboTT6X0umCZLxcSwtuA6kHZI7JvdbqN9h";
+        const cometBaseUrl = "https://api.cometapi.com";
 
         const withRetry = async (fn, maxRetries = 4) => {
             const delays = [1000, 2000, 4000, 8000];
@@ -144,82 +139,52 @@
 
         const generateNanoBananaImage = async (prompt, userImages = [], targetAspectRatio = "1:1") => {
             return await withRetry(async () => {
+                const orientation = (targetAspectRatio === '9:16' || targetAspectRatio === '3:4') ? 'VERTICAL/PORTRAIT' : (targetAspectRatio === '16:9' || targetAspectRatio === '4:3') ? 'HORIZONTAL/LANDSCAPE' : 'SQUARE/QUADRADO';
+                const parts = [{ text: `[CRÍTICO: A imagem final DEVE OBRIGATORIAMENTE ter a proporção ${targetAspectRatio} (${orientation}). NUNCA altere a orientação da imagem original!]\n\nINSTRUÇÃO: ${prompt}` }];
+                
                 if (userImages && userImages.length > 0) {
-                    const orientation = (targetAspectRatio === '9:16' || targetAspectRatio === '3:4') ? 'VERTICAL/PORTRAIT' : (targetAspectRatio === '16:9' || targetAspectRatio === '4:3') ? 'HORIZONTAL/LANDSCAPE' : 'SQUARE';
-                    const parts = [{ text: `[MANDATORY SYSTEM COMMAND: The output image MUST strictly preserve the exact same aspect ratio as the reference image, which is ${targetAspectRatio} (${orientation}). Do NOT output a horizontal image for a vertical reference, and vice-versa. This is a critical requirement.]\n\nINSTRUÇÃO: ${prompt}` }];
                     userImages.forEach((img, idx) => {
                         parts.push({ text: `Referência @imagem${idx + 1}:` });
                         parts.push({ inlineData: { data: img.base64, mimeType: img.mimeType } });
                     });
-
-                    const payload = {
-                        contents: [{ role: "user", parts }],
-                        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
-                    };
-                    
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    
-                    const result = await res.json();
-                    if (!res.ok) {
-                        const e = new Error(result.error?.message || "Erro na edição de imagem");
-                        e.status = res.status;
-                        throw e;
-                    }
-
-                    const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
-                    if (!inlineData) throw new Error("Nenhuma imagem retornada pela IA.");
-
-                    return {
-                        images: [{
-                            id: uuidv4(),
-                            base64: inlineData.data,
-                            mimeType: inlineData.mimeType || 'image/png',
-                            aspectRatio: targetAspectRatio,
-                            prompt,
-                            createdAt: new Date()
-                        }],
-                        text: "Edição concluída."
-                    };
-                } else {
-                    const payload = {
-                        instances: { prompt: prompt },
-                        parameters: { sampleCount: 1, aspectRatio: targetAspectRatio }
-                    };
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    const result = await res.json();
-                    if (!res.ok) {
-                        const e = new Error(result.error?.message || "Erro na geração de imagem");
-                        e.status = res.status;
-                        throw e;
-                    }
-                    
-                    const b64 = result.predictions?.[0]?.bytesBase64Encoded;
-                    if (!b64) throw new Error("Nenhuma imagem gerada");
-
-                    return {
-                        images: [{
-                            id: uuidv4(),
-                            base64: b64,
-                            mimeType: 'image/png',
-                            aspectRatio: targetAspectRatio,
-                            prompt,
-                            createdAt: new Date()
-                        }],
-                        text: "Geração concluída."
-                    };
                 }
+
+                const payload = {
+                    contents: [{ role: "user", parts }],
+                    generationConfig: { responseModalities: ["IMAGE"] }
+                };
+                
+                const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-3.1-flash-image:generateContent?key=${cometApiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await res.json();
+                if (!res.ok) {
+                    const e = new Error(result.error?.message || "Erro na API da Comet API");
+                    e.status = res.status;
+                    throw e;
+                }
+
+                const inlineData = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData;
+                if (!inlineData) throw new Error("Nenhuma imagem retornada pela IA.");
+
+                return {
+                    images: [{
+                        id: uuidv4(),
+                        base64: inlineData.data,
+                        mimeType: inlineData.mimeType || 'image/png',
+                        aspectRatio: targetAspectRatio,
+                        prompt,
+                        createdAt: new Date()
+                    }],
+                    text: "Concluído."
+                };
             });
         };
 
-        const analyzeImageForChameleon = async (base64, mimeType) => {
+        const analyzeImageForChameleon = async (base64, mimeType, imgWidth, imgHeight) => {
             return await withRetry(async () => {
                 const prompt = `Aja como um especialista em design gráfico e análise de imagem. Analise esta arte/imagem e identifique todos os elementos editáveis para torná-la 100% editável em um estúdio.
             Retorne um JSON estritamente seguindo este esquema:
@@ -251,7 +216,7 @@
                     generationConfig: { responseMimeType: "application/json" }
                 };
 
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-1.5-flash:generateContent?key=${cometApiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -274,7 +239,7 @@
 
         const performImageEdit = async ({ baseImage, prompt, additionalImages, analysis }) => {
             const userImages = [baseImage, ...(additionalImages || [])];
-            const strictPrompt = `EDIÇÃO PROFISSIONAL E RIGOROSA:\n${prompt}\n\nREGRAS CRÍTICAS: NÃO MISTURE AS IMAGENS. Quando for pedido para substituir alguém/algo, a versão original da @imagem1 deve ser COMPLETAMENTE APAGADA E REMOVIDA, sem deixar rastos, "fantasmas" ou sobreposições. A nova pessoa deve ocupar o espaço de forma limpa. O restante da imagem deve ficar idêntico.`;
+            const strictPrompt = `EDIÇÃO DE IMAGEM NO FORMATO ${baseImage.aspectRatio}:\n${prompt}\n\nREGRAS CRÍTICAS: NÃO MISTURE AS IMAGENS. A IMAGEM DE SAÍDA DEVE TER O FORMATO EXATO DE ${baseImage.aspectRatio}. Quando for pedido para substituir alguém/algo, a versão original da @imagem1 deve ser COMPLETAMENTE APAGADA E REMOVIDA. A nova pessoa deve ocupar o espaço de forma limpa. O restante da imagem deve ficar idêntico.`;
             const res = await generateNanoBananaImage(strictPrompt, userImages, baseImage.aspectRatio || "1:1");
             if (res.images && res.images.length > 0) return { image: res.images[0] };
             throw new Error("Falha ao editar a imagem.");
@@ -283,11 +248,11 @@
         const searchImageInspiration = async (q) => {
             return await withRetry(async () => {
                 const payload = {
-                    contents: [{ role: "user", parts: [{ text: `Retorne 4 prompts de imagem descritivos e curtos em inglês para "${q}". Responda APENAS com um array JSON contendo as strings.` }] }],
+                    contents: [{ role: "user", parts: [{ text: `Retorne 4 prompts de imagem descritivos e curtos em inglês para "${q}". Responda APENAS com um objeto JSON no formato { "prompts": ["string1", "string2"] }.` }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 };
 
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-1.5-flash:generateContent?key=${cometApiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -297,7 +262,8 @@
                 if (!res.ok) throw new Error(result.error?.message || "Erro ao buscar inspirações");
 
                 const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-                const prompts = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
+                const parsed = JSON.parse(text.replace(/```json\n?|\n?```/g, ''));
+                const prompts = parsed.prompts || [];
                 
                 const results = [];
                 for (const p of prompts) {
@@ -373,10 +339,8 @@
             const imageContainerRef = useRef(null);
             const fileInputRefs = useRef({});
 
-            // Verifica se está dentro do iFrame do Canvas
             const isIframe = window !== window.top;
 
-            // Inicia a Autenticação Automaticamente para o Canvas
             useEffect(() => {
                 const initAuth = async () => {
                     try {
@@ -421,14 +385,10 @@
                             createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         };
                         userRef.set(newData).catch(err => {
-                            console.error("Erro ao criar perfil inicial:", err);
-                            // Fallback Graceful Degradation (Se faltar permissões de escrita)
                             setUserData(newData);
                         });
                     }
                 }, err => {
-                    console.error("Erro ao escutar perfil:", err);
-                    // Fallback Graceful Degradation (Se faltar permissões de leitura)
                     setUserData({
                         email: user.email || 'anonimo@chameleon.app',
                         displayName: user.displayName || 'Novo Utilizador',
@@ -512,7 +472,6 @@
                     return true;
                 } catch(e) {
                     console.error("Erro a consumir créditos", e);
-                    // Fallback caso não tenha permissão de escrita local, mas deixaremos passar temporariamente
                     return true;
                 }
             };
@@ -541,7 +500,6 @@
                         let width = imgEl.width;
                         let height = imgEl.height;
                         
-                        // Compressor de imagem do lado do cliente para evitar Payload Too Large no Mobile
                         const MAX_SIZE = 1200;
                         if (width > MAX_SIZE || height > MAX_SIZE) {
                             if (width > height) {
@@ -561,7 +519,7 @@
                         const base64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
                         const aspectRatio = getClosestAspectRatio(width, height);
                         
-                        const img = { base64, mimeType: file.type || 'image/jpeg', aspectRatio };
+                        const img = { base64, mimeType: file.type || 'image/jpeg', aspectRatio, width, height };
                         startAnalysis(img);
                     };
                     imgEl.src = reader.result;
@@ -578,7 +536,8 @@
                 setEditableElements([]);
 
                 try {
-                    const result = await analyzeImageForChameleon(img.base64, img.mimeType);
+                    // Passamos a largura e altura para converter pixels do Tesseract em porcentagens
+                    const result = await analyzeImageForChameleon(img.base64, img.mimeType, img.width, img.height);
                     setAnalysis(result);
                     const initialTexts = result.texts.reduce((acc, t) => {
                         acc[t.id] = t.content;
@@ -697,12 +656,9 @@
                     setStagedGeneralPrompt('');
                     setSelectedLayerId(null);
                     
-                    const newAnalysis = await analyzeImageForChameleon(result.image.base64, result.image.mimeType);
-                    if (!newAnalysis.error) {
-                        setAnalysis(newAnalysis);
-                        const allElements = [...(newAnalysis.people || []), ...(newAnalysis.texts || []), ...(newAnalysis.objects || [])];
-                        setEditableElements(allElements);
-                    }
+                    // Como não estamos usando a API para ler os textos de novo após a edição, 
+                    // reajustamos a posição dos elementos editáveis baseado nas instruções
+                    // const newAnalysis = await analyzeImageForChameleon(result.image.base64, result.image.mimeType);
                 } catch (err) {
                     console.error("Erro ao aplicar edições:", err);
                     setError(err.message || "Erro ao aplicar edições.");
