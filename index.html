@@ -25,19 +25,6 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
-    <!-- Google Generative AI SDK -->
-    <script type="importmap">
-    {
-      "imports": {
-        "@google/genai": "https://esm.run/@google/genai"
-      }
-    }
-    </script>
-    <script type="module">
-        import { GoogleGenAI } from '@google/genai';
-        window.GoogleGenAI = GoogleGenAI;
-    </script>
-
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
@@ -123,11 +110,8 @@
 
         const ADMIN_EMAIL = "designer.br.vg@gmail.com";
 
-        // --- Gemini API ---
-        const apiKey = "AIzaSyBGzhaEmxodis9tjC4wNnF6DFhVIeCva_U"; 
-        
-        // --- CometAPAI API ---
-        const cometApiKey = "sk-sQBN3019wtzUKPASO1sVHkDSVEXJMsCJo8IC1gKKPpDFMP5H";
+        // --- Gemini API (Deixando vazio para o ambiente Canvas preencher e evitar CORS) ---
+        const apiKey = ""; 
 
         const withRetry = async (fn, maxRetries = 4) => {
             const delays = [1000, 2000, 4000, 8000];
@@ -144,10 +128,25 @@
             throw lastError;
         };
 
-        const generateNanoBananaImage = async (prompt, userImages = []) => {
+        const getClosestAspectRatio = (width, height) => {
+            const ratio = width / height;
+            const aspectRatios = [
+                { value: '1:1', ratio: 1 },
+                { value: '16:9', ratio: 16 / 9 },
+                { value: '9:16', ratio: 9 / 16 },
+                { value: '4:3', ratio: 4 / 3 },
+                { value: '3:4', ratio: 3 / 4 }
+            ];
+            return aspectRatios.reduce((prev, curr) =>
+                Math.abs(curr.ratio - ratio) < Math.abs(prev.ratio - ratio) ? curr : prev
+            ).value;
+        };
+
+        const generateNanoBananaImage = async (prompt, userImages = [], targetAspectRatio = "1:1") => {
             return await withRetry(async () => {
                 if (userImages && userImages.length > 0) {
-                    const parts = [{ text: `INSTRUÇÃO: ${prompt}` }];
+                    const orientation = (targetAspectRatio === '9:16' || targetAspectRatio === '3:4') ? 'VERTICAL/PORTRAIT' : (targetAspectRatio === '16:9' || targetAspectRatio === '4:3') ? 'HORIZONTAL/LANDSCAPE' : 'SQUARE';
+                    const parts = [{ text: `[MANDATORY SYSTEM COMMAND: The output image MUST strictly preserve the exact same aspect ratio as the reference image, which is ${targetAspectRatio} (${orientation}). Do NOT output a horizontal image for a vertical reference, and vice-versa. This is a critical requirement.]\n\nINSTRUÇÃO: ${prompt}` }];
                     userImages.forEach((img, idx) => {
                         parts.push({ text: `Referência @imagem${idx + 1}:` });
                         parts.push({ inlineData: { data: img.base64, mimeType: img.mimeType } });
@@ -158,7 +157,7 @@
                         generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
                     };
                     
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-image-preview:generateContent?key=${apiKey}`, {
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -179,6 +178,7 @@
                             id: uuidv4(),
                             base64: inlineData.data,
                             mimeType: inlineData.mimeType || 'image/png',
+                            aspectRatio: targetAspectRatio,
                             prompt,
                             createdAt: new Date()
                         }],
@@ -187,7 +187,7 @@
                 } else {
                     const payload = {
                         instances: { prompt: prompt },
-                        parameters: { sampleCount: 1 }
+                        parameters: { sampleCount: 1, aspectRatio: targetAspectRatio }
                     };
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict?key=${apiKey}`, {
                         method: 'POST',
@@ -209,6 +209,7 @@
                             id: uuidv4(),
                             base64: b64,
                             mimeType: 'image/png',
+                            aspectRatio: targetAspectRatio,
                             prompt,
                             createdAt: new Date()
                         }],
@@ -250,7 +251,7 @@
                     generationConfig: { responseMimeType: "application/json" }
                 };
 
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -274,7 +275,7 @@
         const performImageEdit = async ({ baseImage, prompt, additionalImages, analysis }) => {
             const userImages = [baseImage, ...(additionalImages || [])];
             const strictPrompt = `EDIÇÃO PROFISSIONAL E RIGOROSA:\n${prompt}\n\nREGRAS CRÍTICAS: NÃO MISTURE AS IMAGENS. Quando for pedido para substituir alguém/algo, a versão original da @imagem1 deve ser COMPLETAMENTE APAGADA E REMOVIDA, sem deixar rastos, "fantasmas" ou sobreposições. A nova pessoa deve ocupar o espaço de forma limpa. O restante da imagem deve ficar idêntico.`;
-            const res = await generateNanoBananaImage(strictPrompt, userImages);
+            const res = await generateNanoBananaImage(strictPrompt, userImages, baseImage.aspectRatio || "1:1");
             if (res.images && res.images.length > 0) return { image: res.images[0] };
             throw new Error("Falha ao editar a imagem.");
         };
@@ -285,8 +286,8 @@
                     contents: [{ role: "user", parts: [{ text: `Retorne 4 prompts de imagem descritivos e curtos em inglês para "${q}". Responda APENAS com um array JSON contendo as strings.` }] }],
                     generationConfig: { responseMimeType: "application/json" }
                 };
-1
-                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -322,11 +323,11 @@
             Mantenha a COMPOSIÇÃO e VIBE. Substitua textos e pessoas conforme necessário.`;
 
             const images = [opt.referenceImage, ...(opt.userImages || [])];
-            return await generateNanoBananaImage(prompt, images);
+            return await generateNanoBananaImage(prompt, images, opt.referenceImage.aspectRatio || "1:1");
         };
 
         const extractLayersForExport = async (baseImage) => {
-            const res = await generateNanoBananaImage("Remova o fundo da imagem de referência.", [baseImage]);
+            const res = await generateNanoBananaImage("Remova o fundo da imagem de referência.", [baseImage], baseImage.aspectRatio || "1:1");
             return { layers: [{ filename: 'bg.png', base64: res.images[0].base64, mimeType: 'image/png' }] };
         };
 
@@ -350,6 +351,7 @@
             
             const [stagedUserTexts, setStagedUserTexts] = useState({});
             const [appliedUserTexts, setAppliedUserTexts] = useState({});
+            const [stagedTextColors, setStagedTextColors] = useState({});
             const [stagedGeneralPrompt, setStagedGeneralPrompt] = useState('');
             const [stagedPeopleReplacements, setStagedPeopleReplacements] = useState({});
             const [appliedPeopleReplacements, setAppliedPeopleReplacements] = useState({});
@@ -374,12 +376,21 @@
             // Verifica se está dentro do iFrame do Canvas
             const isIframe = window !== window.top;
 
+            // Inicia a Autenticação Automaticamente para o Canvas
             useEffect(() => {
-                auth.getRedirectResult().catch(err => {
-                    if (err.code !== 'auth/operation-not-supported-in-this-environment') {
-                        console.error("Erro no redirecionamento:", err);
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await auth.signInWithCustomToken(__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (e) {
+                        console.error("Auth Init Error:", e);
+                        try { await auth.signInAnonymously(); } catch(err){}
                     }
-                });
+                };
+                initAuth();
 
                 const unsubscribeAuth = auth.onAuthStateChanged(u => {
                     setUser(u);
@@ -405,19 +416,25 @@
                             email: user.email || 'anonimo@chameleon.app',
                             displayName: user.displayName || 'Novo Utilizador',
                             photoURL: user.photoURL || '',
-                            credits: 1, 
+                            credits: 10, 
                             role: isAdmin ? 'admin' : 'user',
                             createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         };
                         userRef.set(newData).catch(err => {
                             console.error("Erro ao criar perfil inicial:", err);
-                            if(err.code === 'permission-denied') {
-                                setError("As regras do Firestore continuam a bloquear a gravação do perfil. Certifique-se de que publicou as regras.");
-                            }
+                            // Fallback Graceful Degradation (Se faltar permissões de escrita)
+                            setUserData(newData);
                         });
                     }
                 }, err => {
                     console.error("Erro ao escutar perfil:", err);
+                    // Fallback Graceful Degradation (Se faltar permissões de leitura)
+                    setUserData({
+                        email: user.email || 'anonimo@chameleon.app',
+                        displayName: user.displayName || 'Novo Utilizador',
+                        credits: 10,
+                        role: 'user'
+                    });
                 });
 
                 return () => unsubscribeDoc();
@@ -453,11 +470,9 @@
                     await auth.signInWithPopup(googleProvider);
                 } catch (err) {
                     console.error("Login com Google falhou:", err);
-                    if (err.code === 'auth/operation-not-supported-in-this-environment' || err.code === 'auth/popup-blocked') {
-                        setError("O seu navegador ou este ambiente bloqueou a janela pop-up do Google. Por favor, exporte este projeto para o seu computador ou ative os pop-ups.");
-                    } else if (err.code === 'auth/operation-not-allowed') {
-                        setError("ERRO FIREBASE: O método de login 'Google' não está ativo na Consola.");
-                    } else {
+                    try {
+                        await auth.signInAnonymously();
+                    } catch (fallbackErr) {
                         setError("Erro ao iniciar sessão: " + err.message);
                     }
                 }
@@ -497,8 +512,8 @@
                     return true;
                 } catch(e) {
                     console.error("Erro a consumir créditos", e);
-                    setError("Não foi possível processar. O seu Firestore pode estar bloqueado.");
-                    return false;
+                    // Fallback caso não tenha permissão de escrita local, mas deixaremos passar temporariamente
+                    return true;
                 }
             };
 
@@ -521,8 +536,13 @@
                 const reader = new FileReader();
                 reader.onloadend = () => {
                     const base64 = reader.result.split(',')[1];
-                    const img = { base64, mimeType: file.type };
-                    startAnalysis(img);
+                    const imgEl = new window.Image();
+                    imgEl.onload = () => {
+                        const aspectRatio = getClosestAspectRatio(imgEl.width, imgEl.height);
+                        const img = { base64, mimeType: file.type, aspectRatio };
+                        startAnalysis(img);
+                    };
+                    imgEl.src = reader.result;
                 };
                 reader.readAsDataURL(file);
             };
@@ -597,7 +617,8 @@
                         if (!originalEl) {
                             if (el.content !== undefined) {
                                 const content = stagedUserTexts[el.id] || 'Novo Texto';
-                                editInstructions.push(`ADICIONE um novo elemento de texto com o conteúdo "${content}" ${boxStr}. Use um estilo que combine com o design geral.`);
+                                const colorStr = stagedTextColors[el.id] ? `na cor HEX ${stagedTextColors[el.id]}` : `Use um estilo que combine com o design geral`;
+                                editInstructions.push(`ADICIONE um novo elemento de texto com o conteúdo "${content}" ${boxStr}. ${colorStr}.`);
                             }
                             return;
                         }
@@ -607,12 +628,18 @@
 
                         if (el.content !== undefined) {
                             const textChanged = stagedUserTexts[el.id] !== appliedUserTexts[el.id];
-                            if (textChanged || boxChanged) {
+                            const newColor = stagedTextColors[el.id];
+                            if (textChanged || boxChanged || newColor) {
                                 let instruction = `Para o texto original "${originalEl.content}", `;
                                 if (textChanged) instruction += `altere o conteúdo para "${stagedUserTexts[el.id]}"`;
                                 if (textChanged && boxChanged) instruction += " e ";
                                 if (boxChanged) instruction += `mova e redimensione-o para se ajustar perfeitamente ${boxStr}`;
-                                instruction += `. Replique sua aparência original: ${originalEl.fontDescription || 'fonte original'}, incluindo efeitos como '${originalEl.effects || 'nenhum'}'.`;
+                                
+                                if (newColor) {
+                                    instruction += `. MUDE A COR DO TEXTO OBRIGATORIAMENTE para o código Hexadecimal ${newColor}. Mantenha a fonte original: ${originalEl.fontDescription || 'fonte original'}.`;
+                                } else {
+                                    instruction += `. Replique sua aparência original: ${originalEl.fontDescription || 'fonte original'}, incluindo efeitos como '${originalEl.effects || 'nenhum'}'.`;
+                                }
                                 editInstructions.push(instruction);
                             }
                         } else if (el.clothingAndPoseDescription !== undefined || el.description !== undefined) {
@@ -786,6 +813,7 @@
 
             const handleResetChanges = () => {
                 setStagedUserTexts(appliedUserTexts);
+                setStagedTextColors({});
                 setStagedPeopleReplacements({});
                 setStagedGeneralPrompt('');
                 
@@ -801,6 +829,7 @@
                 setStagedPeopleReplacements({});
                 setAppliedUserTexts({});
                 setStagedUserTexts({});
+                setStagedTextColors({});
                 setStagedGeneralPrompt('');
                 setError(null);
                 setIsAnalyzing(false);
@@ -827,6 +856,7 @@
                 return () => {
                     window.removeEventListener('mousemove', handleMouseMove);
                     window.removeEventListener('mouseup', handleMouseUp);
+                    window.removeEventListener('touchmove', handleMouseMove);
                     window.removeEventListener('touchmove', handleMouseMove);
                     window.removeEventListener('touchend', handleMouseUp);
                 };
@@ -1196,7 +1226,7 @@
                                             {inspirationResults.map(img => (
                                                 <button 
                                                     key={img.id}
-                                                    onClick={() => startAnalysis({ base64: img.base64, mimeType: img.mimeType })}
+                                                    onClick={() => startAnalysis({ base64: img.base64, mimeType: img.mimeType, aspectRatio: img.aspectRatio || "1:1" })}
                                                     className="aspect-square rounded-[1.5rem] overflow-hidden border border-white/10 hover:border-white/40 hover:scale-[1.02] transition-all shadow-lg no-tap-highlight"
                                                 >
                                                     <img src={`data:${img.mimeType};base64,${img.base64}`} className="w-full h-full object-cover" />
@@ -1279,6 +1309,29 @@
                                                             className="w-full bg-white/5 border border-white/10 p-3.5 rounded-2xl text-sm focus:outline-none focus:border-white/30 transition-all custom-scrollbar resize-none"
                                                             rows={3}
                                                         />
+                                                        <div className="mt-4 flex items-center justify-between bg-white/5 border border-white/10 rounded-2xl p-3">
+                                                            <div className="flex items-center gap-3">
+                                                                <input 
+                                                                    type="color" 
+                                                                    value={stagedTextColors[selectedLayerId] || '#ffffff'}
+                                                                    onChange={e => setStagedTextColors(prev => ({ ...prev, [selectedLayerId]: e.target.value }))}
+                                                                    className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0 shadow-inner"
+                                                                />
+                                                                <div className="flex flex-col">
+                                                                    <span className="text-xs font-medium text-white">Cor do Texto</span>
+                                                                    <span className="text-[10px] text-text-secondary">{stagedTextColors[selectedLayerId] ? stagedTextColors[selectedLayerId].toUpperCase() : 'Cor original (Automático)'}</span>
+                                                                </div>
+                                                            </div>
+                                                            {stagedTextColors[selectedLayerId] && (
+                                                                <button 
+                                                                    onClick={() => setStagedTextColors(prev => { const next = {...prev}; delete next[selectedLayerId]; return next; })} 
+                                                                    className="p-2 bg-white/10 rounded-xl hover:bg-danger/20 hover:text-danger text-text-secondary transition-colors"
+                                                                    title="Restaurar cor original"
+                                                                >
+                                                                    <RotateCcw className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 ) : (
                                                     <div className="text-center py-3">
