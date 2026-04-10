@@ -103,8 +103,11 @@
         const googleProvider = new firebase.auth.GoogleAuthProvider();
 
         const ADMIN_EMAIL = "designer.br.vg@gmail.com";
+        
+        // Google Gemini API Oficial (Deixado vazio para o ambiente Canvas gerenciar a chave e as permissões de forma estável)
+        const apiKey = "";
 
-        // CometAPAI API (Apenas para Geração de Imagem Editada)
+        // CometAPAI API (Usado APENAS para Geração de Imagem Editada)
         const cometApiKey = "sk-TYekxdTtLoff1EcboTT6X0umCZLxcSwtuA6kHZI7JvdbqN9h";
         const cometBaseUrl = "https://api.cometapi.com";
 
@@ -154,6 +157,7 @@
                     generationConfig: { responseModalities: ["IMAGE"] }
                 };
                 
+                // Mantido CometAPI para edição de imagens
                 const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-3.1-flash-image:generateContent?key=${cometApiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -216,7 +220,8 @@
                     generationConfig: { responseMimeType: "application/json" }
                 };
 
-                const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-1.5-flash:generateContent?key=${cometApiKey}`, {
+                // Trocado para o modelo suportado no ambiente Canvas para texto e análise visual
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -252,7 +257,8 @@
                     generationConfig: { responseMimeType: "application/json" }
                 };
 
-                const res = await fetch(`${cometBaseUrl}/v1beta/models/gemini-1.5-flash:generateContent?key=${cometApiKey}`, {
+                // Trocado para o modelo suportado no ambiente Canvas para texto e análise visual
+                const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -385,10 +391,14 @@
                             createdAt: firebase.firestore.FieldValue.serverTimestamp()
                         };
                         userRef.set(newData).catch(err => {
+                            console.error("Erro ao criar perfil inicial:", err);
+                            // Fallback Graceful Degradation (Se faltar permissões de escrita)
                             setUserData(newData);
                         });
                     }
                 }, err => {
+                    console.error("Erro ao escutar perfil:", err);
+                    // Fallback Graceful Degradation (Se faltar permissões de leitura)
                     setUserData({
                         email: user.email || 'anonimo@chameleon.app',
                         displayName: user.displayName || 'Novo Utilizador',
@@ -472,6 +482,7 @@
                     return true;
                 } catch(e) {
                     console.error("Erro a consumir créditos", e);
+                    // Fallback caso não tenha permissão de escrita local, mas deixaremos passar temporariamente
                     return true;
                 }
             };
