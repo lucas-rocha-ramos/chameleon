@@ -535,11 +535,33 @@
                 if (!file) return;
                 const reader = new FileReader();
                 reader.onloadend = () => {
-                    const base64 = reader.result.split(',')[1];
                     const imgEl = new window.Image();
                     imgEl.onload = () => {
-                        const aspectRatio = getClosestAspectRatio(imgEl.width, imgEl.height);
-                        const img = { base64, mimeType: file.type, aspectRatio };
+                        const canvas = document.createElement('canvas');
+                        let width = imgEl.width;
+                        let height = imgEl.height;
+                        
+                        // Compressor de imagem do lado do cliente para evitar Payload Too Large no Mobile
+                        const MAX_SIZE = 1200;
+                        if (width > MAX_SIZE || height > MAX_SIZE) {
+                            if (width > height) {
+                                height = Math.round((height * MAX_SIZE) / width);
+                                width = MAX_SIZE;
+                            } else {
+                                width = Math.round((width * MAX_SIZE) / height);
+                                height = MAX_SIZE;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(imgEl, 0, 0, width, height);
+                        
+                        const base64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
+                        const aspectRatio = getClosestAspectRatio(width, height);
+                        
+                        const img = { base64, mimeType: file.type || 'image/jpeg', aspectRatio };
                         startAnalysis(img);
                     };
                     imgEl.src = reader.result;
@@ -1355,7 +1377,22 @@
                                                                     const reader = new FileReader();
                                                                     reader.onload = () => {
                                                                         const base64 = reader.result.split(',')[1];
-                                                                        setStagedPeopleReplacements(prev => ({ ...prev, [selectedLayerId]: { base64, mimeType: file.type } }));
+                                                                        const imgEl = new window.Image();
+                                                                        imgEl.onload = () => {
+                                                                            const canvas = document.createElement('canvas');
+                                                                            let width = imgEl.width;
+                                                                            let height = imgEl.height;
+                                                                            const MAX_SIZE = 1200;
+                                                                            if (width > MAX_SIZE || height > MAX_SIZE) {
+                                                                                if (width > height) { height = Math.round((height * MAX_SIZE) / width); width = MAX_SIZE; } 
+                                                                                else { width = Math.round((width * MAX_SIZE) / height); height = MAX_SIZE; }
+                                                                            }
+                                                                            canvas.width = width; canvas.height = height;
+                                                                            canvas.getContext('2d').drawImage(imgEl, 0, 0, width, height);
+                                                                            const compressedBase64 = canvas.toDataURL(file.type || 'image/jpeg', 0.8).split(',')[1];
+                                                                            setStagedPeopleReplacements(prev => ({ ...prev, [selectedLayerId]: { base64: compressedBase64, mimeType: file.type || 'image/jpeg' } }));
+                                                                        };
+                                                                        imgEl.src = reader.result;
                                                                     };
                                                                     reader.readAsDataURL(file);
                                                                 }
